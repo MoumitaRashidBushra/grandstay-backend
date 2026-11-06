@@ -27,9 +27,130 @@
 
 ## Project setup
 
+### Prerequisites
+
+- Node.js 20+ and npm
+- PostgreSQL 14+ running locally (the schema uses the `btree_gist` extension, which ships with the standard Postgres contrib package)
+
+### Install and configure
+
 ```bash
 $ npm install
+$ cp .env.example .env     # on Windows PowerShell: Copy-Item .env.example .env
 ```
+
+Edit `.env` and set the values for your machine:
+
+| Variable         | Description                                  | Example                                                  |
+| ---------------- | -------------------------------------------- | -------------------------------------------------------- |
+| `NODE_ENV`       | Runtime environment                          | `development`                                            |
+| `PORT`           | HTTP port                                    | `3000`                                                   |
+| `DATABASE_URL`   | PostgreSQL connection string used by Prisma  | `postgresql://postgres:password@localhost:5432/grandstay` |
+| `JWT_SECRET`     | Secret used to sign JWTs (use a strong value) | `replace_with_a_secure_secret`                           |
+| `JWT_EXPIRES_IN` | JWT lifetime                                 | `1d`                                                     |
+
+Create the empty database first (name must match `DATABASE_URL`):
+
+```bash
+$ psql -U postgres -c "CREATE DATABASE grandstay;"
+```
+
+## Database (Prisma)
+
+The data layer uses [Prisma](https://www.prisma.io/) 5 with PostgreSQL. Files live in [prisma/](prisma/):
+
+| File                    | Purpose                                                       |
+| ----------------------- | ------------------------------------------------------------- |
+| `prisma/schema.prisma`  | Data model (users, rooms, bookings, payments, invoices, etc.) |
+| `prisma/migrations/`    | SQL migration history (applied in order)                      |
+| `prisma/seed.js`        | Development seed data                                         |
+| `prisma/drop_all.sql`   | Destructive helper that drops every table (dev only)          |
+
+See [docs/erd.md](docs/erd.md) and [docs/schema.md](docs/schema.md) for the ERD and schema documentation.
+
+### 1. Generate the Prisma Client
+
+```bash
+$ npx prisma generate
+```
+
+This also runs automatically after `npm install` and `prisma migrate`, but run it manually whenever `schema.prisma` changes.
+
+### 2. Run migrations
+
+```bash
+# development: apply pending migrations (creates the DB schema)
+$ npx prisma migrate dev
+
+# production / CI: apply existing migrations only, never creates new ones
+$ npx prisma migrate deploy
+
+# check which migrations are applied
+$ npx prisma migrate status
+```
+
+To change the schema, edit `prisma/schema.prisma` and run `npx prisma migrate dev --name <describe_change>`, then commit the generated folder under `prisma/migrations/`. Constraints Prisma cannot express are added by hand-editing the migration SQL (see the notes at the bottom of `schema.prisma`).
+
+### 3. Seed the database
+
+```bash
+$ npx prisma db seed
+```
+
+This runs `node prisma/seed.js` (configured under `"prisma"."seed"` in `package.json`). `migrate dev` also runs the seed automatically when it creates a fresh database or after a reset.
+
+The seed script:
+
+- is **development only** and **re-runnable**: it first **deletes all existing data** from every table, then re-creates it;
+- is deterministic (seeded PRNG), so every run produces the same data;
+- creates hotel settings, room categories (Standard, Deluxe, Suite), rooms, users and a spread of bookings with related records.
+
+Seeded accounts (all use the password `Password@123`):
+
+| Role         | Email                                              |
+| ------------ | -------------------------------------------------- |
+| ADMIN        | `admin@grandstay.example`                          |
+| RECEPTIONIST | `reception1@grandstay.example`, `reception2@...`, etc. |
+| CUSTOMER     | generated from names, e.g. `rahim.uddin@example.com` |
+
+The script prints a summary (room, user and booking counts) when it finishes.
+
+> Never run the seed against a production database.
+
+### Useful commands
+
+```bash
+# open Prisma Studio (browser GUI for the data)
+$ npx prisma studio
+
+# drop everything and re-apply all migrations, then seed
+$ npx prisma migrate reset
+
+# validate / format the schema
+$ npx prisma validate
+$ npx prisma format
+
+# manually drop all tables (destructive, dev only)
+$ psql -U USER -h localhost -d DBNAME -f prisma/drop_all.sql
+```
+
+### Quick start (fresh clone)
+
+```bash
+$ npm install
+$ cp .env.example .env          # then edit DATABASE_URL
+$ npx prisma migrate dev        # create tables
+$ npx prisma db seed            # populate sample data
+$ npm run start:dev             # start the API
+```
+
+### Troubleshooting
+
+- **`P1001: Can't reach database server`**: check PostgreSQL is running and `DATABASE_URL` host, port and credentials are correct.
+- **`P1003` / database does not exist**: create the database first (see above).
+- **`extension "btree_gist" is not available`**: install the PostgreSQL contrib package, or use a role allowed to create extensions.
+- **`@prisma/client did not initialize yet`**: run `npx prisma generate`.
+- **Drift detected on `migrate dev`**: the DB was changed outside migrations; run `npx prisma migrate reset` (dev only, wipes data).
 
 ## Compile and run the project
 
