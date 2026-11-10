@@ -30,13 +30,100 @@
 ### Prerequisites
 
 - Node.js 20+ and npm
-- PostgreSQL 14+ running locally (the schema uses the `btree_gist` extension, which ships with the standard Postgres contrib package)
+- PostgreSQL 16 running locally (the schema uses the `btree_gist` extension, which ships with the standard Postgres contrib package)
 
 ### Install and configure
 
 ```bash
 $ npm install
 $ cp .env.example .env     # on Windows PowerShell: Copy-Item .env.example .env
+```
+
+## Docker Compose setup (PostgreSQL)
+
+This project runs its local database in Docker Compose using the service defined in `docker-compose.yml`.
+
+### 1. Configure environment variables
+
+Create or update the root `.env` file with the database values:
+
+```env
+POSTGRES_DB=grandstay
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=password
+POSTGRES_PORT=5432
+DATABASE_URL=postgresql://postgres:password@localhost:5432/grandstay
+```
+
+### 2. Start the database container
+
+```bash
+docker compose up -d
+```
+
+Check the database status:
+
+```bash
+docker compose ps
+```
+
+To view logs:
+
+```bash
+docker compose logs -f postgres
+```
+
+To stop it:
+
+```bash
+docker compose down
+```
+
+> The database is exposed on `localhost:5432` and persists in the Docker volume `grandstay_pgdata`.
+
+### 3. Run Prisma migrations
+
+After the PostgreSQL container is up, generate the Prisma client and apply migrations:
+
+```bash
+npx prisma generate
+npx prisma migrate deploy
+```
+
+If you want demo data:
+
+```bash
+npx prisma db seed
+```
+
+### 4. Reset the database
+
+Use this only for local development when you want a clean database state.
+
+#### Full reset with Docker volume removal
+
+```bash
+docker compose down -v
+docker compose up -d
+npx prisma migrate reset
+```
+
+This removes the database volume, recreates the PostgreSQL container, and resets the schema and seed data.
+
+#### Manual destructive reset
+
+```bash
+psql -U postgres -h localhost -d grandstay -f prisma/drop_all.sql
+npx prisma migrate deploy
+npx prisma db seed
+```
+
+## Run the backend locally
+
+Once the database is running and migrations are applied, start the NestJS app:
+
+```bash
+npm run start:dev
 ```
 
 Edit `.env` and set the values for your machine:
@@ -139,7 +226,7 @@ $ psql -U USER -h localhost -d DBNAME -f prisma/drop_all.sql
 ```bash
 $ npm install
 $ cp .env.example .env          # then edit DATABASE_URL
-$ npx prisma migrate dev        # create tables
+$ npx prisma migrate deploy        # create tables
 $ npx prisma db seed            # populate sample data
 $ npm run start:dev             # start the API
 ```
