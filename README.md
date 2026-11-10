@@ -43,6 +43,8 @@ $ cp .env.example .env     # on Windows PowerShell: Copy-Item .env.example .env
 
 This project runs its local database in Docker Compose using the service defined in `docker-compose.yml`.
 
+The Postgres container automatically runs `docker/postgres/init.sql` on first startup, which creates the required `btree_gist` extension for the schema.
+
 ### 1. Configure environment variables
 
 Create or update the root `.env` file with the database values:
@@ -79,7 +81,7 @@ To stop it:
 docker compose down
 ```
 
-> The database is exposed on `localhost:5432` and persists in the Docker volume `grandstay_pgdata`.
+> The database is exposed on `localhost:5432`, persists in the Docker volume `grandstay_pgdata`, and is initialized by `docker/postgres/init.sql`.
 
 ### 3. Run Prisma migrations
 
