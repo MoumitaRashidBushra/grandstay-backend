@@ -1,6 +1,6 @@
 name: Backend CI
 
-# Run lint and unit tests for every pull request.
+# Run lint, unit tests and API tests (against PostgreSQL) for every pull request.
 on:
   pull_request:
     branches:
@@ -43,3 +43,64 @@ jobs:
       # Unit tests only (vitest default config); e2e tests are excluded.
       - name: Run unit tests
         run: npm test
+
+  # API (e2e) tests run against a real PostgreSQL instance so that Prisma
+  # queries, constraints and migrations are exercised, not mocked.
+  api-tests:
+    name: API tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Throwaway PostgreSQL service container, created fresh for each run and
+    # destroyed when the job ends. Reachable from the runner at localhost:5432.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: grandstay_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+        ports:
+          - 5432:5432
+        # Wait until PostgreSQL accepts connections before running any steps,
+        # otherwise migrations could fail with "connection refused".
+        options: >-
+          --health-cmd "pg_isready -U postgres -d grandstay_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Connection settings read by Prisma and the app. These are CI-only
+    # credentials for the disposable container - never use real secrets here.
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:password@localhost:5432/grandstay_test
+      JWT_SECRET: ci-test-secret
+      JWT_EXPIRES_IN: 1h
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Install the exact dependency set from the lockfile.
+      - name: Install dependencies
+        run: npm ci
+
+      # Generate the typed Prisma client from schema.prisma.
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # Apply committed migrations (not `db push`) so CI validates the same
+      # migration history that production uses.
+      - name: Apply database migrations
+        run: npx prisma migrate deploy
+
+      # Run the e2e/API suite (vitest.config.e2e.ts) against the service DB.
+      - name: Run API tests
+        run: npm run test:e2e
