@@ -1,0 +1,45 @@
+name: Backend CI
+
+# Run lint and unit tests for every pull request.
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+# Least privilege: the workflow only needs to read the repository.
+permissions:
+  contents: read
+
+# Cancel outdated runs when new commits are pushed to the same PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Install the exact dependency set from the lockfile.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint
+        run: npm run lint
+
+      # Unit tests only (vitest default config); e2e tests are excluded.
+      - name: Run unit tests
+        run: npm test
