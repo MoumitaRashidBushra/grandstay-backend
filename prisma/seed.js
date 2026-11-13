@@ -1,7 +1,9 @@
 // GrandStay seed data (development only). Re-runnable: it wipes all tables first.
 //   npx prisma db seed
 import { PrismaClient } from '@prisma/client';
-import bcrypt from 'bcryptjs';
+import argon2 from 'argon2';
+
+//import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
@@ -59,7 +61,13 @@ async function wipe() {
 
 async function main() {
   await wipe();
-  const passwordHash = await bcrypt.hash(DEV_PASSWORD, 10);
+  //const passwordHash = await bcrypt.hash(DEV_PASSWORD, 10);
+  const passwordHash = await argon2.hash(DEV_PASSWORD, {
+  type: argon2.argon2id,
+  memoryCost: 19456, // 19 MiB
+  timeCost: 2,       // 2 iterations
+  parallelism: 1,
+});
 
   // Hotel settings (single row)
   await prisma.hotelSettings.create({

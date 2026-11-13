@@ -62,20 +62,20 @@ jobs:
           POSTGRES_PASSWORD: password
         ports:
           - 5432:5432
-        # Wait until PostgreSQL accepts connections before running any steps,
-        # otherwise migrations could fail with "connection refused".
+
+        # Wait until PostgreSQL accepts connections before running any steps.
         options: >-
           --health-cmd "pg_isready -U postgres -d grandstay_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
 
-    # Connection settings read by Prisma and the app. These are CI-only
-    # credentials for the disposable container - never use real secrets here.
+    # CI-only credentials for the disposable PostgreSQL container and tests.
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://postgres:password@localhost:5432/grandstay_test
       JWT_SECRET: ci-test-secret
+      JWT_ACCESS_SECRET: ci-test-secret-for-grandstay-api-tests
       JWT_EXPIRES_IN: 1h
 
     steps:
@@ -96,11 +96,10 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
-      # Apply committed migrations (not `db push`) so CI validates the same
-      # migration history that production uses.
+      # Apply committed migrations (not db push) so CI validates migration history.
       - name: Apply database migrations
         run: npx prisma migrate deploy
 
-      # Run the e2e/API suite (vitest.config.e2e.ts) against the service DB.
+      # Run the e2e/API suite against the PostgreSQL service database.
       - name: Run API tests
         run: npm run test:e2e
