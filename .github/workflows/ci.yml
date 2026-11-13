@@ -41,8 +41,9 @@ jobs:
         run: npm run lint
 
       # Unit tests only (vitest default config); e2e tests are excluded.
-      - name: Run unit tests
-        run: npm test
+      # Fails if coverage drops below the NFR-OPS-03 thresholds in vitest.config.ts.
+      - name: Run unit tests with coverage gate
+        run: npm run test:cov
 
   # API (e2e) tests run against a real PostgreSQL instance so that Prisma
   # queries, constraints and migrations are exercised, not mocked.
