@@ -260,12 +260,49 @@ $ npm run start:prod
 # unit tests
 $ npm run test
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
+# unit tests with the coverage gate (NFR-OPS-03: >= 60% overall,
+# >= 80% on availability, booking and state-machine services)
 $ npm run test:cov
 ```
+
+### API tests (Vitest + Supertest, real PostgreSQL)
+
+API tests live in `test/**/*.e2e-spec.ts` and run against a separate, throwaway
+PostgreSQL container (`docker-compose.test.yml`, port 5433, database `grandstay_test`),
+so they never touch development data.
+
+```bash
+$ npm run test:db:up     # start the test database (waits until healthy)
+$ npm run test:e2e       # apply migrations, then run the API suite
+$ npm run test:db:down   # stop and delete the test database
+```
+
+- Settings come from `.env.test`; variables already set in the environment (CI) win.
+- Migrations are applied automatically before the suite (`test/setup/global-setup.ts`).
+  The suite refuses to run unless `NODE_ENV=test` and the database name ends in `_test`.
+- Helpers in `test/utils/`: `createTestApp()` / `api(app)` (Supertest against the full
+  `AppModule`), `resetDatabase()` (truncate all tables), and user factories
+  (`createAdmin()`, `createReceptionist()`, `createCustomer()`).
+
+```ts
+import { api, createTestApp, TestApp } from './utils/app.js';
+import { disconnectDatabase, resetDatabase } from './utils/db.js';
+import { createCustomer } from './utils/factories.js';
+
+describe('GET /something', () => {
+  let app: TestApp;
+  beforeAll(async () => { app = await createTestApp(); });
+  beforeEach(resetDatabase);
+  afterAll(async () => { await app.close(); await disconnectDatabase(); });
+
+  it('returns 200', async () => {
+    const customer = await createCustomer();
+    await api(app).get('/something').expect(200);
+  });
+});
+```
+
+In CI (`.github/workflows/ci.yml`) the same suite runs against a PostgreSQL service container.
 
 ## Deployment
 

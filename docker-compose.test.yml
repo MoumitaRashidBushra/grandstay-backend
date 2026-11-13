@@ -1,0 +1,24 @@
+# Throwaway PostgreSQL for the API test suite. Separate from docker-compose.yml so tests
+# can never touch development data.
+#   npm run test:db:up     start (waits until healthy)
+#   npm run test:db:down   stop and delete everything
+# Data lives in tmpfs (RAM): fast, and wiped whenever the container stops.
+services:
+  postgres-test:
+    image: postgres:16
+    container_name: grandstay-postgres-test
+    environment:
+      POSTGRES_DB: grandstay_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d grandstay_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
