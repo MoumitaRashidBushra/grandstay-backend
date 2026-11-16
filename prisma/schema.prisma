@@ -51,8 +51,8 @@ model HotelSettings {
   address      String   @db.VarChar(255)
   phone        String   @db.VarChar(20)
   email        String   @db.VarChar(254)
-  checkinTime  DateTime @default(dbgenerated("'14:00'::time")) @map("checkin_time") @db.Time(6)
-  checkoutTime DateTime @default(dbgenerated("'12:00'::time")) @map("checkout_time") @db.Time(6)
+  checkinTime  DateTime @default(dbgenerated("'14:00:00'::time without time zone")) @map("checkin_time") @db.Time(6)
+  checkoutTime DateTime @default(dbgenerated("'12:00:00'::time without time zone")) @map("checkout_time") @db.Time(6)
   timezone     String   @default("Asia/Dhaka") @db.VarChar(40)
 
   @@map("hotel_settings")
@@ -98,7 +98,9 @@ model User {
   mustResetPw  Boolean   @default(false) @map("must_reset_pw")
   failedLogins Int       @default(0) @map("failed_logins") @db.SmallInt
   lockedUntil  DateTime? @map("locked_until") @db.Timestamptz(6)
+  lastFailedLoginAt DateTime? @map("last_failed_login_at") @db.Timestamptz(6)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  failedLoginWindowStartedAt DateTime? @map("failed_login_window_started_at") @db.Timestamptz(6)
 
   bookings           Booking[]        @relation("BookingCustomer")
   checkedInBookings  Booking[]        @relation("BookingCheckedInBy")
@@ -106,33 +108,49 @@ model User {
   issuedInvoices     Invoice[]
   idempotencyKeys    IdempotencyKey[]
   auditLogs          AuditLog[]
+  refreshTokens      RefreshToken[]
 
   @@map("users")
 }
 
+// Stores hashed refresh tokens so sessions can be revoked.
+model RefreshToken {
+  id        BigInt    @id @default(autoincrement())
+  userId    BigInt    @map("user_id")
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
 model Booking {
-  id              BigInt        @id @default(autoincrement())
-  reference       String        @unique @db.Char(15) // GS-YYMMDD-XXXXX
-  customerId      BigInt        @map("customer_id")
-  roomId          Int           @map("room_id")
-  checkIn         DateTime      @map("check_in") @db.Date
-  checkOut        DateTime      @map("check_out") @db.Date
+  id              BigInt                    @id @default(autoincrement())
+  reference       String                    @unique @db.Char(15) // GS-YYMMDD-XXXXX
+  customerId      BigInt                    @map("customer_id")
+  roomId          Int                       @map("room_id")
+  checkIn         DateTime                  @map("check_in") @db.Date
+  checkOut        DateTime                  @map("check_out") @db.Date
   /// GENERATED ALWAYS AS (daterange(check_in, check_out, '[)')) STORED — managed by the DB, used by the EXCLUDE constraint.
-  stay            Unsupported("daterange")?
+  stay            Unsupported("daterange")? @default(dbgenerated("daterange(check_in, check_out, '[)'::text)"))
   /// GENERATED ALWAYS AS (check_out - check_in) STORED — read-only; never write it from the client.
-  nights          Int?          @db.SmallInt
-  guests          Int           @db.SmallInt
-  leadGuestName   String        @map("lead_guest_name") @db.VarChar(120)
-  leadGuestMobile String        @map("lead_guest_mobile") @db.Char(11)
-  nightlyPrice    Decimal       @map("nightly_price") @db.Decimal(12, 2)
-  totalAmount     Decimal       @map("total_amount") @db.Decimal(12, 2)
-  status          BookingStatus @default(CONFIRMED)
-  confirmedAt     DateTime      @default(now()) @map("confirmed_at") @db.Timestamptz(6)
-  cancelledAt     DateTime?     @map("cancelled_at") @db.Timestamptz(6)
-  checkedInAt     DateTime?     @map("checked_in_at") @db.Timestamptz(6)
-  checkedInById   BigInt?       @map("checked_in_by")
-  checkedOutAt    DateTime?     @map("checked_out_at") @db.Timestamptz(6)
-  checkedOutById  BigInt?       @map("checked_out_by")
+  nights          Int?                      @default(dbgenerated("((check_out - check_in))::smallint")) @db.SmallInt
+  guests          Int                       @db.SmallInt
+  leadGuestName   String                    @map("lead_guest_name") @db.VarChar(120)
+  leadGuestMobile String                    @map("lead_guest_mobile") @db.Char(11)
+  nightlyPrice    Decimal                   @map("nightly_price") @db.Decimal(12, 2)
+  totalAmount     Decimal                   @map("total_amount") @db.Decimal(12, 2)
+  status          BookingStatus             @default(CONFIRMED)
+  confirmedAt     DateTime                  @default(now()) @map("confirmed_at") @db.Timestamptz(6)
+  cancelledAt     DateTime?                 @map("cancelled_at") @db.Timestamptz(6)
+  checkedInAt     DateTime?                 @map("checked_in_at") @db.Timestamptz(6)
+  checkedInById   BigInt?                   @map("checked_in_by")
+  checkedOutAt    DateTime?                 @map("checked_out_at") @db.Timestamptz(6)
+  checkedOutById  BigInt?                   @map("checked_out_by")
 
   customer     User     @relation("BookingCustomer", fields: [customerId], references: [id], onDelete: Restrict)
   room         Room     @relation(fields: [roomId], references: [id], onDelete: Restrict)
