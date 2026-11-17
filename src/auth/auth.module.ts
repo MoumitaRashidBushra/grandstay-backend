@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';//provides the JwtService used to sign access tokens.
+import { ThrottlerModule } from '@nestjs/throttler';
 
 import { AuthController } from './auth.controller.js';//exposes the login endpoint.
 import { AuthService } from './auth.service.js';//contains the login business logic.
@@ -14,6 +15,12 @@ if (!jwtSecret) {
 @Module({
   imports: [
     PrismaModule,
+    ThrottlerModule.forRoot([
+    {
+      ttl: 60_000,//a 60-second time window
+      limit: 10,//a maximum of 10 requests during that window.
+    },
+  ]),
     JwtModule.register({
       secret: jwtSecret,
       signOptions: {

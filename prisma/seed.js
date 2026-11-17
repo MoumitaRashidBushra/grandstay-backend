@@ -1,9 +1,9 @@
 // GrandStay seed data (development only). Re-runnable: it wipes all tables first.
 //   npx prisma db seed
-import { PrismaClient } from '@prisma/client';
+//mport { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 
-//import bcrypt from 'bcryptjs';
+import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
