@@ -3,6 +3,7 @@ import { Test, TestingModuleBuilder } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../../src/app.module.js';
+import { configureApp } from '../../src/configure-app.js';
 
 export type TestApp = INestApplication<App>;
 
@@ -14,6 +15,7 @@ export async function createTestApp(
     Test.createTestingModule({ imports: [AppModule] }),
   ).compile();
   const app = moduleRef.createNestApplication<TestApp>();
+  configureApp(app);
   await app.init();
   return app;
 }
