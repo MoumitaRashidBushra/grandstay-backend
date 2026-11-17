@@ -1,12 +1,26 @@
-import { Injectable, UnauthorizedException, HttpException,
-  HttpStatus } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as argon2 from 'argon2';
+import { Prisma, UserRole, type User } from '@prisma/client';
 
 import { createHash, randomBytes } from 'node:crypto';
 
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
+import { CreateStaffDto } from './dto/create-staff.dto.js';
 import { LoginDto } from './dto/login.dto.js';
+import { RegisterDto } from './dto/register.dto.js';
+import { UpdateProfileDto } from './dto/update-profile.dto.js';
+import { UpdateStaffDto } from './dto/update-staff.dto.js';
+import { assertPasswordPolicy, hashPassword, verifyPassword } from './password.js';
 
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -88,8 +102,138 @@ private async recordFailedLogin(userId: bigint): Promise<void> {
     `;
   }
 
+  async register(dto: RegisterDto) {
+    if (dto.role && dto.role !== UserRole.CUSTOMER) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        message: ['role is not allowed on registration'],
+        error: 'Unprocessable Entity',
+      });
+    }
+
+    assertPasswordPolicy(dto.password);
+    const email = this.normalizeEmail(dto.email);
+    await this.ensureEmailAvailable(email);
+
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          fullName: dto.fullName.trim(),
+          email,
+          mobile: dto.mobile,
+          passwordHash: await hashPassword(dto.password),
+          role: UserRole.CUSTOMER,
+        },
+      });
+      return toPublicUser(user);
+    } catch (error) {
+      throw this.rethrowEmailTaken(error);
+    }
+  }
+
+  async createReceptionist(dto: CreateStaffDto) {
+    assertPasswordPolicy(dto.password);
+    const email = this.normalizeEmail(dto.email);
+    await this.ensureEmailAvailable(email);
+
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          fullName: dto.fullName.trim(),
+          email,
+          mobile: dto.mobile,
+          passwordHash: await hashPassword(dto.password),
+          role: UserRole.RECEPTIONIST,
+          mustResetPw: true,
+        },
+      });
+      return toPublicUser(user);
+    } catch (error) {
+      throw this.rethrowEmailTaken(error);
+    }
+  }
+
+  async updateReceptionist(id: string, dto: UpdateStaffDto) {
+    const userId = parseUserId(id);
+    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!existing || existing.role !== UserRole.RECEPTIONIST) {
+      throw receptionistNotFound();
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.user.update({
+        where: { id: userId },
+        data: { isActive: dto.isActive },
+      });
+      if (!dto.isActive) {
+        await tx.refreshToken.updateMany({
+          where: { userId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+      return row;
+    });
+
+    return toPublicUser(updated);
+  }
+
+  async getProfile(userId: bigint) {
+    return toPublicUser(await this.requireActiveUser(userId));
+  }
+
+  async updateProfile(userId: bigint, dto: UpdateProfileDto) {
+    await this.requireActiveUser(userId);
+    const data: Prisma.UserUpdateInput = {};
+    if (dto.fullName !== undefined) {
+      data.fullName = dto.fullName.trim();
+    }
+    if (dto.mobile !== undefined) {
+      data.mobile = dto.mobile;
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data,
+    });
+    return toPublicUser(updated);
+  }
+
+  async changePassword(userId: bigint, dto: ChangePasswordDto) {
+    const user = await this.requireActiveUser(userId);
+    const currentMatches = await verifyPassword(
+      user.passwordHash,
+      dto.currentPassword,
+    );
+    if (!currentMatches) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'CURRENT_PASSWORD_WRONG',
+        message: 'Current password is wrong',
+      });
+    }
+
+    assertPasswordPolicy(dto.newPassword);
+    const passwordHash = await hashPassword(dto.newPassword);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          passwordHash,
+          mustResetPw: false,
+        },
+      });
+      await tx.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    });
+
+    return { message: 'Password updated' };
+  }
+
   async login(loginDto: LoginDto) {
-    const email = loginDto.email.trim().toLowerCase();
+    const email = this.normalizeEmail(loginDto.email);
 
     // 1. Find the user by email.
     const user = await this.prisma.user.findUnique({
@@ -113,16 +257,10 @@ private async recordFailedLogin(userId: bigint): Promise<void> {
     }
 
     // 3. Verify the submitted password against the stored Argon2id hash.
-    let passwordIsValid = false;
-
-    try {
-      passwordIsValid = await argon2.verify(
-        user.passwordHash,//the hash stored in PostgreSQL.
-        loginDto.password,//the plain-text password submitted by the user.
-      );
-    } catch {
-      passwordIsValid = false;
-    }
+    const passwordIsValid = await verifyPassword(
+      user.passwordHash,
+      loginDto.password,
+    );
 
     // Record an unsuccessful login attempt.
     if (!passwordIsValid) {
@@ -267,6 +405,70 @@ async logout(refreshToken?: string) : Promise<void>{
   });
 }
 //updateMany doesnt throw error if token doesnot exist
+
+  private normalizeEmail(email: string): string {
+    return email.trim().toLowerCase();
+  }
+
+  private async ensureEmailAvailable(email: string): Promise<void> {
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      throw emailTaken();
+    }
+  }
+
+  private rethrowEmailTaken(error: unknown): never {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
+    ) {
+      throw emailTaken();
+    }
+    throw error;
+  }
+
+  private async requireActiveUser(userId: bigint): Promise<User> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Unauthenticated');
+    }
+    return user;
+  }
+}
+
+function toPublicUser(user: User) {
+  return {
+    id: user.id.toString(),
+    fullName: user.fullName,
+    email: user.email,
+    mobile: user.mobile,
+    role: user.role,
+    mustResetPw: user.mustResetPw,
+    isActive: user.isActive,
+  };
+}
+
+function emailTaken(): ConflictException {
+  return new ConflictException({
+    statusCode: 409,
+    code: 'EMAIL_TAKEN',
+    message: 'Email is already registered',
+  });
+}
+
+function receptionistNotFound(): NotFoundException {
+  return new NotFoundException({
+    statusCode: 404,
+    code: 'NOT_FOUND',
+    message: 'Receptionist not found',
+  });
+}
+
+function parseUserId(id: string): bigint {
+  if (!/^\d+$/.test(id)) {
+    throw receptionistNotFound();
+  }
+  return BigInt(id);
 }
 
 //randomBytes(64) creates a cryptographically random refresh token.
