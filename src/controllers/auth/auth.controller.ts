@@ -1,8 +1,9 @@
 import { Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { AuthService, AccountLockedException } from './auth.service.js';
-import { LoginDto } from './dto/login.dto.js';
+import { AuthService, AccountLockedException} from '../../services/auth/auth.service.js';
+import { LoginDto } from '../../dto/login.dto.js';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Public } from '../../auth/decorators/public.decorator.js';
 
 const refreshCookieOptions = {
   httpOnly: true,
@@ -24,6 +25,7 @@ export class AuthController {
     //LoginDto validates the incoming data through your global ValidationPipe.
   }*/
 
+  @Public()
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('login')
@@ -53,6 +55,7 @@ export class AuthController {
     }
   }
 
+  @Public()
   @Post('refresh')
   async refresh(
     @Req() req: Request,
@@ -69,7 +72,8 @@ export class AuthController {
       accessToken: result.accessToken,
     };
   }
-
+  
+  @Public()
   @Post('logout') //Creates the logout POST endpoint.
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     //@Req() req:	Accesses the incoming HTTP request.
