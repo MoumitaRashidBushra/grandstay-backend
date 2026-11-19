@@ -5,8 +5,8 @@ import * as argon2 from 'argon2';
 
 import { createHash, randomBytes } from 'node:crypto';
 
-import { PrismaService } from '../prisma/prisma.service.js';
-import { LoginDto } from './dto/login.dto.js';
+import { PrismaService } from '../../prisma/prisma.service.js';
+import { LoginDto } from '../../dto/login.dto.js';
 
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 

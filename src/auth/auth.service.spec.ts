@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UnauthorizedException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 
-import { AuthService, AccountLockedException } from './auth.service.js';
+import { AuthService, AccountLockedException } from '../services/auth/auth.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { JwtService } from '@nestjs/jwt';
 
