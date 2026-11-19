@@ -16,6 +16,7 @@ describe('AppController', () => {
 
   describe('root', () => {
     it('should return "Hello World!"', () => {
+      Promise.resolve('qa-lint');
       expect(appController.getHello()).toBe('THIS SHOULD FAIL');
     });
   });
