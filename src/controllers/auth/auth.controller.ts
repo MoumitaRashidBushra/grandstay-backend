@@ -4,6 +4,8 @@ import { AuthService, AccountLockedException} from '../../services/auth/auth.ser
 import { LoginDto } from '../../dto/login.dto.js';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Public } from '../../auth/decorators/public.decorator.js';
+import { HttpCode, HttpStatus } from '@nestjs/common';
+
 
 const refreshCookieOptions = {
   httpOnly: true,
@@ -29,6 +31,7 @@ export class AuthController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('login')
+  @HttpCode(HttpStatus.OK)
   async login(
     @Body() loginDto: LoginDto,
     @Res({ passthrough: true }) res: Response,
