@@ -1,5 +1,6 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModuleBuilder } from '@nestjs/testing';
+import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../../src/app.module.js';
@@ -14,6 +15,14 @@ export async function createTestApp(
     Test.createTestingModule({ imports: [AppModule] }),
   ).compile();
   const app = moduleRef.createNestApplication<TestApp>();
+  app.use(cookieParser());
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  );
+  app.setGlobalPrefix('api/v1');
   await app.init();
   return app;
 }

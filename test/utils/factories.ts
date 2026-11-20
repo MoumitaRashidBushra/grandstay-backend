@@ -1,5 +1,5 @@
 import { Prisma, User, UserRole } from '@prisma/client';
-import bcrypt from 'bcryptjs';
+import * as argon2 from 'argon2';
 import { prisma } from './db.js';
 
 export const TEST_PASSWORD = 'Password@123';
@@ -7,8 +7,14 @@ export const TEST_PASSWORD = 'Password@123';
 let seq = 0;
 const next = () => ++seq;
 
-// Low bcrypt cost keeps tests fast; the hash format is the same as production.
-const hash = (password: string) => bcrypt.hash(password, 4);
+// Light Argon2id parameters keep tests fast. Login verifies any Argon2 hash.
+const hash = (password: string) =>
+  argon2.hash(password, {
+    type: argon2.argon2id,
+    memoryCost: 2 ** 12,
+    timeCost: 1,
+    parallelism: 1,
+  });
 
 export type UserOverrides = Partial<
   Omit<Prisma.UserCreateInput, 'passwordHash'>

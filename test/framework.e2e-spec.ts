@@ -1,5 +1,5 @@
 import { UserRole } from '@prisma/client';
-import bcrypt from 'bcryptjs';
+import * as argon2 from 'argon2';
 import { disconnectDatabase, prisma, resetDatabase } from './utils/db.js';
 import {
   createAdmin,
@@ -40,7 +40,7 @@ describe('API test framework', () => {
       UserRole.RECEPTIONIST,
       UserRole.CUSTOMER,
     ]);
-    expect(await bcrypt.compare(customer.password, customer.passwordHash)).toBe(
+    expect(await argon2.verify(customer.passwordHash, customer.password)).toBe(
       true,
     );
   });
