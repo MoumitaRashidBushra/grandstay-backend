@@ -5,6 +5,7 @@ import { AppService } from './app.service.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { UsersModule } from './users/users.module.js';
+import { SrsEndpointsModule } from './srs-endpoints/srs-endpoints.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -21,6 +22,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
       appSecret: process.env.OBSERVE_APP_SECRET ?? 'YOUR_APP_SECRET',
       serviceId: 'grandstay-backend',
     }),
+    SrsEndpointsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
