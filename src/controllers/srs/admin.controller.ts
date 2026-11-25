@@ -1,20 +1,16 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, NotImplementedException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  NotImplementedException,
+} from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator.js';
-
-@Controller('admin/staff')
-@Roles(UserRole.ADMIN)
-export class AdminStaffController {
-  @Post()
-  createStaff(@Body() _body: unknown): never {
-    throw new NotImplementedException('Staff account creation is not implemented yet');
-  }
-
-  @Patch(':id')
-  updateStaff(@Param('id') _id: string, @Body() _body: unknown): never {
-    throw new NotImplementedException('Staff account update is not implemented yet');
-  }
-}
 
 @Controller('admin/rooms')
 @Roles(UserRole.ADMIN)
@@ -46,7 +42,9 @@ export class AdminRoomsController {
 
   @Post(':id/status')
   updateRoomStatus(@Param('id') _id: string, @Body() _body: unknown): never {
-    throw new NotImplementedException('Room maintenance/status operation is not implemented yet');
+    throw new NotImplementedException(
+      'Room maintenance/status operation is not implemented yet',
+    );
   }
 }
 
@@ -55,7 +53,9 @@ export class AdminRoomsController {
 export class AdminReportsController {
   @Get('reservations')
   getReservations(@Query() _query: unknown): never {
-    throw new NotImplementedException('Admin reservation filters are not implemented yet');
+    throw new NotImplementedException(
+      'Admin reservation filters are not implemented yet',
+    );
   }
 
   @Get('dashboard')

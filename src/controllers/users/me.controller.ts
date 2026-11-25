@@ -1,17 +1,19 @@
 import { Controller, Get, NotFoundException, Req } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { Roles } from '../../auth/decorators/roles.decorator.js';
 import type { AuthenticatedRequest } from '../../auth/guards/jwt-auth.guard.js';
 /*AuthenticatedRequest is only used as a TypeScript type.
 import type tells TypeScript that it doesn't need to import this as a runtime JavaScript value.
 This satisfies the isolatedModules and emitDecoratorMetadata requirements.*/
-
 
 @Controller('me')
 export class MeController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get()
+  @Roles(UserRole.ADMIN, UserRole.RECEPTIONIST, UserRole.CUSTOMER)
   async getProfile(@Req() request: AuthenticatedRequest) {
     const userId = BigInt(request.user.sub);
 
