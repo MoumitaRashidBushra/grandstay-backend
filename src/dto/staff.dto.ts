@@ -42,9 +42,6 @@ export class CreateStaffDto {
   })
   mobile!: string;
 
-  @IsIn(STAFF_ROLES)
-  role!: StaffRole;
-
   @IsString()
   @MinLength(8)
   @MaxLength(72)
@@ -70,10 +67,6 @@ export class UpdateStaffDto {
     message: 'mobile must be an 11-digit Bangladeshi mobile number',
   })
   mobile?: string;
-
-  @IsOptional()
-  @IsIn(STAFF_ROLES)
-  role?: StaffRole;
 
   @IsOptional()
   @IsBoolean()

@@ -130,7 +130,6 @@ describe('StaffService', () => {
       fullName: ' Rubina Akter ',
       email: ' Reception1@grandstay.example ',
       mobile: '01722000001',
-      role: UserRole.RECEPTIONIST,
       password: 'Password@123',
     });
 
@@ -164,7 +163,6 @@ describe('StaffService', () => {
         fullName: 'Rubina Akter',
         email: 'reception1@grandstay.example',
         mobile: '01722000001',
-        role: UserRole.RECEPTIONIST,
         password: 'Password@123',
       }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -178,7 +176,6 @@ describe('StaffService', () => {
         fullName: 'Rubina Akter',
         email: 'reception1@grandstay.example',
         mobile: '01722000001',
-        role: UserRole.RECEPTIONIST,
         password: 'Password@123',
       }),
     ).rejects.toThrow('db down');
@@ -218,16 +215,20 @@ describe('StaffService', () => {
     });
   });
 
-  it('changes the role and revokes refresh tokens', async () => {
+  it('sets a temporary password and revokes refresh tokens', async () => {
     prisma.user.findUnique.mockResolvedValue(receptionist);
     prisma.user.update.mockResolvedValue({
       ...receptionist,
-      role: UserRole.ADMIN,
+      mustResetPw: true,
     });
 
-    const result = await service.update('2', { role: UserRole.ADMIN }, '1');
+    const result = await service.resetTemporaryPassword(
+      '2',
+      'Password@123',
+      '1',
+    );
 
-    expect(result.role).toBe(UserRole.ADMIN);
+    expect(result.mustResetPw).toBe(true);
     expect(prisma.refreshToken.updateMany).toHaveBeenCalled();
   });
 
@@ -272,26 +273,22 @@ describe('StaffService', () => {
     prisma.user.count.mockResolvedValue(0);
 
     await expect(
-      service.update('1', { role: UserRole.RECEPTIONIST }, '2'),
+      service.update('1', { isActive: false }, '2'),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('allows another administrator to demote an admin', async () => {
+  it('deactivates an administrator when another active administrator remains', async () => {
     prisma.user.findUnique.mockResolvedValue(admin);
     prisma.user.count.mockResolvedValue(1);
     prisma.user.update.mockResolvedValue({
       ...admin,
-      role: UserRole.RECEPTIONIST,
+      isActive: false,
     });
 
-    const result = await service.update(
-      '1',
-      { role: UserRole.RECEPTIONIST },
-      '8',
-    );
+    const result = await service.update('1', { isActive: false }, '8');
 
-    expect(result.role).toBe(UserRole.RECEPTIONIST);
+    expect(result.isActive).toBe(false);
   });
 
   it('rejects a duplicate email when updating an account', async () => {

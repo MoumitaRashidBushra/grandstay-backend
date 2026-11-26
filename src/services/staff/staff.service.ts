@@ -120,7 +120,7 @@ export class StaffService {
           email: dto.email.trim().toLowerCase(),
           mobile: dto.mobile,
           passwordHash,
-          role: dto.role,
+          role: UserRole.RECEPTIONIST,
           isActive: true,
           mustResetPw: true,
         },
@@ -137,47 +137,34 @@ export class StaffService {
     }
   }
 
-  async update(
-    id: string,
+  update(id: string, dto: UpdateStaffDto, actorId: string) {
+    return this.updateAccount(id, dto, actorId, [
+      UserRole.ADMIN,
+      UserRole.RECEPTIONIST,
+    ]);
+  }
+
+  private async applyUpdate(
+    existing: StaffRecord,
     dto: UpdateStaffDto,
     actorId: string,
   ): Promise<StaffAccount> {
-    const userId = this.parseId(id);
-
-    if (!this.hasChanges(dto)) {
-      throw new BadRequestException('No changes were provided');
-    }
-
-    const existing = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: staffSelect,
-    });
-
-    if (
-      !existing ||
-      (existing.role !== UserRole.ADMIN &&
-        existing.role !== UserRole.RECEPTIONIST)
-    ) {
-      throw new NotFoundException('Staff account not found');
-    }
-
-    const changesOwnAccess =
+    const changesOwnStatus =
       actorId === existing.id.toString() &&
-      ((dto.role !== undefined && dto.role !== existing.role) ||
-        (dto.isActive !== undefined && dto.isActive !== existing.isActive));
+      dto.isActive !== undefined &&
+      dto.isActive !== existing.isActive;
 
-    if (changesOwnAccess) {
+    if (changesOwnStatus) {
       throw new ForbiddenException(
-        'You cannot change your own role or account status',
+        'You cannot change your own account status',
       );
     }
 
-    const nextRole = dto.role ?? existing.role;
     const nextActive = dto.isActive ?? existing.isActive;
     const removesLastAdmin =
       existing.role === UserRole.ADMIN &&
       existing.isActive &&
-      (nextRole !== UserRole.ADMIN || !nextActive);
+      !nextActive;
 
     if (removesLastAdmin) {
       const otherActiveAdmins = await this.prisma.user.count({
@@ -195,9 +182,7 @@ export class StaffService {
       }
     }
 
-    const accessChanged =
-      (dto.isActive === false && existing.isActive) ||
-      (dto.role !== undefined && dto.role !== existing.role);
+    const accessChanged = dto.isActive === false && existing.isActive;
 
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
@@ -211,7 +196,6 @@ export class StaffService {
               ? { email: dto.email.trim().toLowerCase() }
               : {}),
             ...(dto.mobile !== undefined ? { mobile: dto.mobile } : {}),
-            ...(dto.role !== undefined ? { role: dto.role } : {}),
             ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
           },
           select: staffSelect,
@@ -237,6 +221,115 @@ export class StaffService {
     }
   }
 
+  async listCustomers(query: ListStaffQueryDto) {
+    const search = query.search?.trim();
+    const where: Prisma.UserWhereInput = { role: UserRole.CUSTOMER };
+
+    if (search) {
+      where.OR = [
+        { fullName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [customers, roster] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        select: staffSelect,
+        orderBy: { fullName: 'asc' },
+      }),
+      this.prisma.user.findMany({
+        where: { role: UserRole.CUSTOMER },
+        select: { isActive: true },
+      }),
+    ]);
+
+    return {
+      customers: customers.map(toStaffAccount),
+      summary: {
+        total: roster.length,
+        active: roster.filter((user) => user.isActive).length,
+      },
+    };
+  }
+
+  updateCustomer(id: string, dto: UpdateStaffDto, actorId: string) {
+    return this.updateAccount(id, dto, actorId, [UserRole.CUSTOMER]);
+  }
+
+  async resetTemporaryPassword(id: string, password: string, actorId: string) {
+    const userId = this.parseId(id);
+    const existing = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: staffSelect,
+    });
+
+    if (
+      !existing ||
+      (existing.role !== UserRole.RECEPTIONIST &&
+        existing.role !== UserRole.CUSTOMER)
+    ) {
+      throw new NotFoundException('Account not found');
+    }
+
+    if (actorId === existing.id.toString()) {
+      throw new ForbiddenException(
+        'Change your own password from your profile',
+      );
+    }
+
+    const passwordHash = await argon2.hash(password, {
+      type: argon2.argon2id,
+      memoryCost: 19456,
+      timeCost: 2,
+      parallelism: 1,
+    });
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({
+        where: { id: existing.id },
+        data: {
+          passwordHash,
+          mustResetPw: true,
+        },
+        select: staffSelect,
+      });
+
+      await tx.refreshToken.updateMany({
+        where: { userId: existing.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+
+      return user;
+    });
+
+    return toStaffAccount(updated);
+  }
+
+  private async updateAccount(
+    id: string,
+    dto: UpdateStaffDto,
+    actorId: string,
+    allowedRoles: UserRole[],
+  ): Promise<StaffAccount> {
+    const userId = this.parseId(id);
+
+    if (!this.hasChanges(dto)) {
+      throw new BadRequestException('No changes were provided');
+    }
+
+    const existing = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: staffSelect,
+    });
+
+    if (!existing || !allowedRoles.includes(existing.role)) {
+      throw new NotFoundException('Account not found');
+    }
+
+    return this.applyUpdate(existing, dto, actorId);
+  }
+
   private parseId(id: string): bigint {
     if (!/^\d+$/.test(id)) {
       throw new BadRequestException('Staff id must be a number');
@@ -250,7 +343,6 @@ export class StaffService {
       dto.fullName !== undefined ||
       dto.email !== undefined ||
       dto.mobile !== undefined ||
-      dto.role !== undefined ||
       dto.isActive !== undefined
     );
   }

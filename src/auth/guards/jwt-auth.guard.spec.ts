@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { UnauthorizedException, type ExecutionContext } from '@nestjs/common';
+import {
+  ForbiddenException,
+  UnauthorizedException,
+  type ExecutionContext,
+} from '@nestjs/common';
 
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
@@ -9,6 +13,8 @@ describe('JwtAuthGuard', () => {
   const reflectorMock = { getAllAndOverride: vi.fn() };
   const handler = () => undefined;
   class TestClass {}
+
+  const prismaMock = { user: { findUnique: vi.fn() } };
 
   let guard: JwtAuthGuard;
 
@@ -26,7 +32,18 @@ describe('JwtAuthGuard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     reflectorMock.getAllAndOverride.mockReturnValue(false);
-    guard = new JwtAuthGuard(jwtMock as never, reflectorMock as never);
+    prismaMock.user.findUnique.mockResolvedValue({
+      id: 1n,
+      email: 'a@b.c',
+      role: 'ADMIN',
+      isActive: true,
+      mustResetPw: false,
+    });
+    guard = new JwtAuthGuard(
+      jwtMock as never,
+      reflectorMock as never,
+      prismaMock as never,
+    );
   });
 
   it('skips the token check for @Public() routes', async () => {
@@ -81,5 +98,43 @@ describe('JwtAuthGuard', () => {
 
     expect(jwtMock.verifyAsync).toHaveBeenCalledWith('good.token');
     expect(request.user).toEqual(payload);
+  });
+
+  it('rejects a token for a deactivated account', async () => {
+    jwtMock.verifyAsync.mockResolvedValue({
+      sub: '1',
+      email: 'a@b.c',
+      role: 'ADMIN',
+    });
+    prismaMock.user.findUnique.mockResolvedValue({
+      id: 1n,
+      email: 'a@b.c',
+      role: 'ADMIN',
+      isActive: false,
+      mustResetPw: false,
+    });
+
+    await expect(
+      guard.canActivate(makeContext(withAuth('Bearer good.token'))),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('blocks other routes until a temporary password is changed', async () => {
+    jwtMock.verifyAsync.mockResolvedValue({
+      sub: '1',
+      email: 'a@b.c',
+      role: 'RECEPTIONIST',
+    });
+    prismaMock.user.findUnique.mockResolvedValue({
+      id: 1n,
+      email: 'a@b.c',
+      role: 'RECEPTIONIST',
+      isActive: true,
+      mustResetPw: true,
+    });
+
+    await expect(
+      guard.canActivate(makeContext(withAuth('Bearer good.token'))),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

@@ -13,7 +13,7 @@ describe('MeController', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    controller = new MeController(prismaMock as never);
+    controller = new MeController(prismaMock as never, {} as never);
   });
 
   it('returns the profile with the id converted to a string', async () => {
