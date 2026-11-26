@@ -1,24 +1,17 @@
-import { Controller, Get, Post, Body, NotImplementedException } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { Public } from '../../auth/decorators/public.decorator.js';
-import { UserRole } from '@prisma/client';
-import { Roles } from '../../auth/decorators/roles.decorator.js';
-
+import { RegisterDto } from '../../dto/register.dto.js';
+import { AuthService } from '../../services/auth/auth.service.js';
 
 @Controller('auth')
 export class RegistrationSkeletonController {
+  constructor(private readonly authService: AuthService) {}
+
   @Public()
   @Post('register')
-  register(@Body() _body: unknown): never {
-    throw new NotImplementedException('Customer registration is not implemented yet');
-  }
-}
-
-@Controller('me')
-export class MePasswordSkeletonController {
-  @Post('password')
-  @Roles(UserRole.ADMIN, UserRole.RECEPTIONIST, UserRole.CUSTOMER)
-  changePassword(@Body() _body: unknown): never {
-    throw new NotImplementedException('Password change is not implemented yet');
+  @HttpCode(HttpStatus.CREATED)
+  register(@Body() body: RegisterDto) {
+    return this.authService.register(body);
   }
 }
 

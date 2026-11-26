@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NotFoundException } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 
+import { ROLES_KEY } from '../../auth/decorators/roles.decorator.js';
 import { MeController } from './me.controller.js';
 
 describe('MeController', () => {
@@ -11,7 +13,7 @@ describe('MeController', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    controller = new MeController(prismaMock as never);
+    controller = new MeController(prismaMock as never, {} as never);
   });
 
   it('returns the profile with the id converted to a string', async () => {
@@ -45,6 +47,12 @@ describe('MeController', () => {
       role: 'CUSTOMER',
       mustResetPw: false,
     });
+  });
+
+  it('allows every signed-in role to read their own profile', () => {
+    expect(
+      Reflect.getMetadata(ROLES_KEY, MeController.prototype.getProfile),
+    ).toEqual([UserRole.ADMIN, UserRole.RECEPTIONIST, UserRole.CUSTOMER]);
   });
 
   it('throws NotFoundException when the user does not exist', async () => {

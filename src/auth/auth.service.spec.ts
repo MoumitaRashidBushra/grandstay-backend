@@ -2,12 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UnauthorizedException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 
-import { AuthService, AccountLockedException } from '../services/auth/auth.service.js';
+import {
+  AccountInactiveException,
+  AccountLockedException,
+  AuthService,
+} from '../services/auth/auth.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { JwtService } from '@nestjs/jwt';
 
 vi.mock('argon2', () => ({
   verify: vi.fn(),
+  hash: vi.fn().mockResolvedValue('argon-hash'),
+  argon2id: 2,
 }));
 
 describe('AuthService', () => {
@@ -100,18 +106,36 @@ describe('AuthService', () => {
       ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('should reject an inactive user', async () => {
+    it('tells a deactivated user only after the password is correct', async () => {
       prisma.user.findUnique.mockResolvedValue({
         ...mockUser,
         isActive: false,
       });
+      vi.mocked(argon2.verify).mockResolvedValue(true);
 
       await expect(
         authService.login({
           email: mockUser.email,
           password: 'password',
         }),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toBeInstanceOf(AccountInactiveException);
+      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+    });
+
+    it('returns the normal login error when a deactivated user types the wrong password', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        ...mockUser,
+        isActive: false,
+      });
+      vi.mocked(argon2.verify).mockResolvedValue(false);
+
+      await expect(
+        authService.login({
+          email: mockUser.email,
+          password: 'wrong-password',
+        }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(prisma.$executeRaw).toHaveBeenCalled();
     });
 
     it('should reject a currently locked account', async () => {

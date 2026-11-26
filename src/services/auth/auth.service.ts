@@ -1,16 +1,45 @@
-import { Injectable, UnauthorizedException, HttpException,
-  HttpStatus } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  UnauthorizedException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 
 import { createHash, randomBytes } from 'node:crypto';
 
-import { PrismaService } from '../../prisma/prisma.service.js';
+import { ChangePasswordDto } from '../../dto/change-password.dto.js';
 import { LoginDto } from '../../dto/login.dto.js';
+import { RegisterDto } from '../../dto/register.dto.js';
+import { PrismaService } from '../../prisma/prisma.service.js';
 
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const MAX_FAILED_LOGINS = 5;
+
+const PASSWORD_HASH_OPTIONS = {
+  memoryCost: 19456,
+  timeCost: 2,
+  parallelism: 1,
+} as const;
+
+export class AccountInactiveException extends HttpException {
+  constructor() {
+    super(
+      {
+        statusCode: 403,
+        code: 'ACCOUNT_INACTIVE',
+        message: 'Your account is deactivated. Please contact the hotel.',
+      },
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
 
 export class AccountLockedException extends HttpException {
   constructor(public readonly retryAfterSeconds: number) {
@@ -96,8 +125,7 @@ private async recordFailedLogin(userId: bigint): Promise<void> {
       where: { email },
     });
 
-    // 2. Reject unknown or inactive users.
-    if (!user || !user.isActive) {
+    if (!user) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
@@ -129,6 +157,10 @@ private async recordFailedLogin(userId: bigint): Promise<void> {
       await this.recordFailedLogin(user.id);
 
       throw new UnauthorizedException('Invalid email or password');
+    }
+
+    if (!user.isActive) {
+      throw new AccountInactiveException();
     }
 
     // Successful login: reset all failed-login tracking fields.
@@ -241,7 +273,99 @@ private async recordFailedLogin(userId: bigint): Promise<void> {
   }
 
 
-async logout(refreshToken?: string) : Promise<void>{
+  async register(dto: RegisterDto) {
+    if (dto.role !== undefined && dto.role !== UserRole.CUSTOMER) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        message: 'role',
+        error: 'Unprocessable Entity',
+        code: 'INVALID_ROLE',
+      });
+    }
+
+    const passwordHash = await this.hashPassword(dto.password);
+
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          fullName: dto.fullName.trim(),
+          email: dto.email.trim().toLowerCase(),
+          mobile: dto.mobile,
+          passwordHash,
+          role: UserRole.CUSTOMER,
+          isActive: true,
+          mustResetPw: false,
+        },
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          mobile: true,
+          role: true,
+          isActive: true,
+          mustResetPw: true,
+        },
+      });
+
+      return {
+        ...user,
+        id: user.id.toString(),
+      };
+    } catch (error) {
+      if (this.isUniqueViolation(error)) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'EMAIL_TAKEN',
+          message: 'Email is already registered',
+        });
+      }
+
+      throw error;
+    }
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: BigInt(userId) },
+    });
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    const currentPasswordMatches = await this.passwordMatches(
+      user.passwordHash,
+      dto.currentPassword,
+    );
+
+    if (!currentPasswordMatches) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'CURRENT_PASSWORD_WRONG',
+        message: 'Current password is wrong',
+      });
+    }
+
+    const passwordHash = await this.hashPassword(dto.newPassword);
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash,
+          mustResetPw: false,
+        },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId: user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+
+    return { mustResetPw: false };
+  }
+
+  async logout(refreshToken?: string): Promise<void> {
   // No refresh token means there is nothing to revoke.
   if (!refreshToken) {
     return;
@@ -267,6 +391,30 @@ async logout(refreshToken?: string) : Promise<void>{
   });
 }
 //updateMany doesnt throw error if token doesnot exist
+
+  private async hashPassword(password: string): Promise<string> {
+    return argon2.hash(password, {
+      type: argon2.argon2id,
+      ...PASSWORD_HASH_OPTIONS,
+    });
+  }
+
+  private async passwordMatches(hash: string, password: string): Promise<boolean> {
+    try {
+      return await argon2.verify(hash, password);
+    } catch {
+      return false;
+    }
+  }
+
+  private isUniqueViolation(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: string }).code === 'P2002'
+    );
+  }
 }
 
 //randomBytes(64) creates a cryptographically random refresh token.

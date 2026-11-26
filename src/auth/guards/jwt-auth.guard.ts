@@ -2,6 +2,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -19,7 +20,9 @@ import { Request } from 'express';
 import { UserRole } from '@prisma/client';
 
 //connect the @Public() decorator to your JWT guard
+import { ALLOW_DURING_PASSWORD_RESET_KEY } from '../decorators/allow-during-password-reset.decorator.js';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
+import { PrismaService } from '../../prisma/prisma.service.js';
 
 // Data we store inside the access token.
 export interface AccessTokenPayload {
@@ -38,6 +41,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private jwtService: JwtService,
     private reflector: Reflector,
+    private prisma: PrismaService,
   ) {}
 
   // Runs before every route. Returns true to allow, throws 401 to block.
@@ -71,8 +75,54 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('Unauthorized');
     }
 
-    // 5. Save the user on the request so controllers and the role guard can use it.
-    request.user = payload;
+    let account: {
+      id: bigint;
+      email: string;
+      role: UserRole;
+      isActive: boolean;
+      mustResetPw: boolean;
+    } | null;
+
+    try {
+      account = await this.prisma.user.findUnique({
+        where: { id: BigInt(payload.sub) },
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          isActive: true,
+          mustResetPw: true,
+        },
+      });
+    } catch {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    if (!account || !account.isActive) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    request.user = {
+      sub: account.id.toString(),
+      email: account.email,
+      role: account.role,
+    };
+
+    if (account.mustResetPw) {
+      const passwordChangeAllowed = this.reflector.getAllAndOverride<boolean>(
+        ALLOW_DURING_PASSWORD_RESET_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+
+      if (!passwordChangeAllowed) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          code: 'PASSWORD_RESET_REQUIRED',
+          message: 'Set a new password before continuing.',
+        });
+      }
+    }
+
     return true;
   }
 
