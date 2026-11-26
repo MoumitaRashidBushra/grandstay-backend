@@ -232,6 +232,37 @@ describe('StaffService', () => {
     expect(prisma.refreshToken.updateMany).toHaveBeenCalled();
   });
 
+  it('allows an admin to set a temporary password for another admin', async () => {
+    const otherAdmin = {
+      ...admin,
+      id: 9n,
+      email: 'backup.admin@grandstay.example',
+    };
+    prisma.user.findUnique.mockResolvedValue(otherAdmin);
+    prisma.user.update.mockResolvedValue({
+      ...otherAdmin,
+      mustResetPw: true,
+    });
+
+    const result = await service.resetTemporaryPassword(
+      '9',
+      'Password@123',
+      '1',
+    );
+
+    expect(result.mustResetPw).toBe(true);
+    expect(result.role).toBe(UserRole.ADMIN);
+    expect(prisma.refreshToken.updateMany).toHaveBeenCalled();
+  });
+
+  it('stops an admin from resetting their own password here', async () => {
+    prisma.user.findUnique.mockResolvedValue(admin);
+
+    await expect(
+      service.resetTemporaryPassword('1', 'Password@123', '1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('rejects an empty update', async () => {
     await expect(service.update('2', {}, '1')).rejects.toBeInstanceOf(
       BadRequestException,

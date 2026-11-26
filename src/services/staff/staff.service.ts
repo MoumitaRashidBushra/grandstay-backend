@@ -264,9 +264,11 @@ export class StaffService {
       select: staffSelect,
     });
 
+    // Staff means ADMIN and RECEPTIONIST (D12). Admin may also reset customers (D4).
     if (
       !existing ||
-      (existing.role !== UserRole.RECEPTIONIST &&
+      (existing.role !== UserRole.ADMIN &&
+        existing.role !== UserRole.RECEPTIONIST &&
         existing.role !== UserRole.CUSTOMER)
     ) {
       throw new NotFoundException('Account not found');
