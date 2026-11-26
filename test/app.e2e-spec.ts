@@ -12,6 +12,6 @@ describe('AppController (e2e)', () => {
   });
 
   it('/ (GET)', () => {
-    return api(app).get('/').expect(200).expect('Hello World!');
+    return api(app).get('/api/v1').expect(200).expect('Hello World!');
   });
 });
