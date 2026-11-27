@@ -1,516 +1,556 @@
-import { ThrottlerGuard } from '@nestjs/throttler';
-import type { User } from '@prisma/client';
-import type { TestApp } from './utils/app.js';
-import { api, createTestApp } from './utils/app.js';
-import { disconnectDatabase, prisma, resetDatabase } from './utils/db.js';
-import {
-  createAdmin,
-  createCustomer,
-  createReceptionist,
-} from './utils/factories.js';
-
-// HTL-35.3 role and ownership access matrix.
-// NFR-SEC-03: every mounted route is called with no token and with each role.
-// NFR-SEC-04: a booking reference or invoice number returns another customer's
-// data to nobody. Profile reads follow the token subject.
-
-const ROLES = ['ADMIN', 'RECEPTIONIST', 'CUSTOMER'] as const;
-type Role = (typeof ROLES)[number];
-type Actor = Role | 'anonymous';
-
-const ACTORS: Actor[] = ['anonymous', ...ROLES];
-
-type Account = User & { password: string };
-type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-
-type Endpoint = {
-  method: Method;
-  path: string;
-  body?: Record<string, unknown>;
-  expect: Record<Actor, number>;
-  notFound?: string;
-};
-
-const MISSING_REFERENCE = 'GS-000101-NONE1';
-const MISSING_INVOICE = 'INV-0000-000000';
-const OWNER_REFERENCE = 'GS-261126-OWN01';
-const OTHER_REFERENCE = 'GS-261126-OWN02';
-const OWNER_INVOICE = 'INV-2026-000001';
-const OTHER_INVOICE = 'INV-2026-000002';
-
-const everyone = (status: number): Record<Actor, number> => ({
-  anonymous: status,
-  ADMIN: status,
-  RECEPTIONIST: status,
-  CUSTOMER: status,
-});
-
-const allow = (roles: readonly Role[], granted: number): Record<Actor, number> => ({
-  anonymous: 401,
-  ADMIN: roles.includes('ADMIN') ? granted : 403,
-  RECEPTIONIST: roles.includes('RECEPTIONIST') ? granted : 403,
-  CUSTOMER: roles.includes('CUSTOMER') ? granted : 403,
-});
-
-const ENDPOINTS: Endpoint[] = [
-  { method: 'GET', path: '/api/v1', expect: everyone(200) },
-  { method: 'GET', path: '/api/v1/health', expect: everyone(200) },
-  { method: 'GET', path: '/api/v1/ready', expect: everyone(200) },
-  { method: 'GET', path: '/api/v1/settings', expect: everyone(200) },
-  { method: 'PUT', path: '/api/v1/settings', body: {}, expect: allow(['ADMIN'], 501) },
-  { method: 'GET', path: '/api/v1/categories', expect: everyone(200) },
-  { method: 'GET', path: '/api/v1/categories/:id', expect: everyone(200) },
-  {
-    method: 'PATCH',
-    path: '/api/v1/categories',
-    body: {},
-    expect: allow(['ADMIN'], 501),
-  },
-  { method: 'GET', path: '/api/v1/availability', expect: everyone(200) },
-  {
-    method: 'POST',
-    path: '/api/v1/auth/register',
-    body: {},
-    expect: everyone(501),
-  },
-  { method: 'POST', path: '/api/v1/auth/login', body: {}, expect: everyone(400) },
-  { method: 'POST', path: '/api/v1/auth/refresh', expect: everyone(401) },
-  { method: 'POST', path: '/api/v1/auth/logout', expect: everyone(201) },
-  {
-    method: 'GET',
-    path: '/api/v1/me',
-    expect: { anonymous: 401, ADMIN: 200, RECEPTIONIST: 200, CUSTOMER: 200 },
-  },
-  {
-    method: 'POST',
-    path: '/api/v1/me/password',
-    body: {},
-    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 501),
-  },
-  {
-    method: 'POST',
-    path: '/api/v1/admin/staff',
-    body: {},
-    expect: allow(['ADMIN'], 501),
-  },
-  {
-    method: 'PATCH',
-    path: '/api/v1/admin/staff/:id',
-    body: {},
-    expect: allow(['ADMIN'], 501),
-  },
-  { method: 'GET', path: '/api/v1/admin/rooms', expect: allow(['ADMIN'], 501) },
-  { method: 'POST', path: '/api/v1/admin/rooms', body: {}, expect: allow(['ADMIN'], 501) },
-  { method: 'GET', path: '/api/v1/admin/rooms/:id', expect: allow(['ADMIN'], 501) },
-  {
-    method: 'PATCH',
-    path: '/api/v1/admin/rooms/:id',
-    body: {},
-    expect: allow(['ADMIN'], 501),
-  },
-  { method: 'DELETE', path: '/api/v1/admin/rooms/:id', expect: allow(['ADMIN'], 501) },
-  {
-    method: 'POST',
-    path: '/api/v1/admin/rooms/:id/status',
-    body: {},
-    expect: allow(['ADMIN'], 501),
-  },
-  { method: 'GET', path: '/api/v1/admin/reservations', expect: allow(['ADMIN'], 501) },
-  { method: 'GET', path: '/api/v1/admin/dashboard', expect: allow(['ADMIN'], 501) },
-  {
-    method: 'POST',
-    path: '/api/v1/bookings/quote',
-    body: {},
-    expect: allow(['CUSTOMER'], 501),
-  },
-  { method: 'POST', path: '/api/v1/bookings', body: {}, expect: allow(['CUSTOMER'], 501) },
-  { method: 'GET', path: '/api/v1/bookings', expect: allow(['CUSTOMER'], 501) },
-  {
-    method: 'GET',
-    path: '/api/v1/bookings/:reference',
-    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 404),
-    notFound: 'Booking not found',
-  },
-  {
-    method: 'GET',
-    path: '/api/v1/bookings/:reference/confirmation.pdf',
-    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 404),
-    notFound: 'Booking not found',
-  },
-  {
-    method: 'POST',
-    path: '/api/v1/bookings/:reference/cancel',
-    expect: allow(['ADMIN', 'CUSTOMER'], 404),
-    notFound: 'Booking not found',
-  },
-  { method: 'GET', path: '/api/v1/desk/bookings', expect: allow(['ADMIN', 'RECEPTIONIST'], 501) },
-  { method: 'GET', path: '/api/v1/desk/arrivals', expect: allow(['ADMIN', 'RECEPTIONIST'], 501) },
-  {
-    method: 'GET',
-    path: '/api/v1/desk/departures',
-    expect: allow(['ADMIN', 'RECEPTIONIST'], 501),
-  },
-  {
-    method: 'POST',
-    path: '/api/v1/desk/bookings/:reference/check-in',
-    expect: allow(['ADMIN', 'RECEPTIONIST'], 501),
-  },
-  {
-    method: 'POST',
-    path: '/api/v1/desk/bookings/:reference/check-out',
-    expect: allow(['ADMIN', 'RECEPTIONIST'], 501),
-  },
-  {
-    method: 'GET',
-    path: '/api/v1/invoices/:number.pdf',
-    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 404),
-    notFound: 'Invoice not found',
-  },
-];
-
-const MATRIX = ENDPOINTS.flatMap((endpoint) =>
-  ACTORS.map((actor) => ({ ...endpoint, actor, status: endpoint.expect[actor] })),
-);
-
-type ObjectRoute = {
-  label: string;
-  method: Method;
-  ownerUrl: string;
-  otherUrl: string;
-  readers: readonly Role[];
-  denial: string;
-};
-
-describe('Role and ownership access matrix', () => {
-  let app: TestApp;
-  let users: Record<Role, Account>;
-  let otherCustomer: Account;
-  let tokens: Record<Role, string>;
-  let otherToken: string;
-
-  beforeAll(async () => {
-    app = await createTestApp((builder) =>
-      builder.overrideGuard(ThrottlerGuard).useValue({ canActivate: () => true }),
-    );
-    await resetDatabase();
-
-    const [admin, receptionist, customer, stranger] = await Promise.all([
-      createAdmin(),
-      createReceptionist(),
-      createCustomer(),
-      createCustomer(),
-    ]);
-    users = { ADMIN: admin, RECEPTIONIST: receptionist, CUSTOMER: customer };
-    otherCustomer = stranger;
-    await seedOwnedRecords(customer, stranger, admin.id);
-
-    tokens = {
-      ADMIN: await accessToken(admin.email, admin.password),
-      RECEPTIONIST: await accessToken(receptionist.email, receptionist.password),
-      CUSTOMER: await accessToken(customer.email, customer.password),
-    };
-    otherToken = await accessToken(stranger.email, stranger.password);
-  });
-
-  afterAll(async () => {
-    await app.close();
-    await disconnectDatabase();
-  });
-
-  describe('NFR-SEC-03 every endpoint and role', () => {
-    it('covers every mounted route', () => {
-      const expected = ENDPOINTS.map(({ method, path }) => ({ method, path })).sort(byRoute);
-      expect(mountedRoutes(app)).toEqual(expected);
+import { VersioningType, } from '@nestjs/common';
+import { iterate } from 'iterare';
+import { platform } from 'os';
+import { Server as TlsServer } from 'tls';
+import { ApplicationConfig } from './application-config.js';
+import { MESSAGES } from './constants.js';
+import { CookieSigner } from './helpers/cookies/cookie-signer.js';
+import { optionalRequire } from './helpers/optional-require.js';
+import { makeSafeInstanceDecorator } from './helpers/safe-instance-decorator.js';
+import { Injector } from './injector/injector.js';
+import { MiddlewareContainer } from './middleware/container.js';
+import { MiddlewareModule } from './middleware/middleware-module.js';
+import { mapToExcludeRoute } from './middleware/utils.js';
+import { NestApplicationContext } from './nest-application-context.js';
+import { RoutesResolver } from './router/routes-resolver.js';
+import { Logger } from '@nestjs/common';
+import { loadPackage, loadPackageCached, tryLoadPackage, addLeadingSlash, isFunction, isObject, isString, } from '@nestjs/common/internal';
+import { RouteConflictDetector } from './router/route-conflict-detector.js';
+import { RouteSpecificitySorter } from './router/route-specificity-sorter.js';
+import { CrossOriginProtection } from './security/cross-origin-protection.js';
+import { HttpSecurityHook } from './security/http-security-hook.js';
+import { resolveSecurityHeaders } from './security/security-headers.js';
+/**
+ * @publicApi
+ */
+export class NestApplication extends NestApplicationContext {
+    httpAdapter;
+    config;
+    graphInspector;
+    logger = new Logger(NestApplication.name, {
+        timestamp: true,
     });
-
-    it.each(MATRIX)(
-      '$method $path as $actor returns $status',
-      async ({ method, path, body, actor, status, notFound }) => {
-        const response = await call(actor, method, concreteUrl(path), body);
-
-        expect(response.status).toBe(status);
-        expectNoSecret(response.body);
-        if (path === '/api/v1/auth/refresh') {
-          expect(response.body.message).toBe('Invalid refresh token');
-        } else if (status === 401) {
-          expect(response.body.message).toBe('Unauthorized');
-        }
-        if (status === 403) expect(response.body.message).toBe('Forbidden');
-        if (status === 404) expect(response.body.message).toBe(notFound);
-
-        if (path === '/api/v1' && status === 200) {
-          expect(response.text).toBe('Hello World!');
-        }
-        if (path === '/api/v1/auth/logout' && status === 201) {
-          expect(response.body.message).toBe('Logged out successfully');
-        }
-        if (path === '/api/v1/me' && status === 200 && actor !== 'anonymous') {
-          expectOwnProfile(response.body, users[actor]);
-          const payload = JSON.stringify(response.body);
-          expect(payload).not.toContain(otherCustomer.email);
-          for (const role of ROLES) {
-            if (role !== actor) expect(payload).not.toContain(users[role].email);
-          }
-        }
-      },
-    );
-  });
-
-  describe('NFR-SEC-04 object access', () => {
-    it.each(ROLES)(
-      '%s keeps their own profile when the query names someone else',
-      async (role) => {
-        const response = await call(role, 'GET', '/api/v1/me', undefined, {
-          id: otherCustomer.id.toString(),
+    middlewareModule;
+    middlewareContainer = new MiddlewareContainer(this.container);
+    microservicesModule = null;
+    socketModule = null;
+    routesResolver;
+    microservices = [];
+    httpServer;
+    isListening = false;
+    isWsModuleRegistered = false;
+    enabledSecurityFeatures = new Set();
+    securityHook;
+    constructor(container, httpAdapter, config, graphInspector, appOptions = {}) {
+        super(container, appOptions);
+        this.httpAdapter = httpAdapter;
+        this.config = config;
+        this.graphInspector = graphInspector;
+        this.config.setRouteConflictPolicy(appOptions.routeConflictPolicy);
+        this.config.setRouteResolutionStrategy(appOptions.routeResolutionStrategy);
+        this.applyCookiesOptions(appOptions);
+        this.selectContextModule();
+        this.registerHttpServer();
+        this.injector = new Injector({
+            preview: this.appOptions.preview,
+            instanceDecorator: appOptions.instrument?.instanceDecorator,
         });
-
-        expect(response.status).toBe(200);
-        expectOwnProfile(response.body, users[role]);
-        expectNoPerson(response.body, otherCustomer);
-      },
-    );
-
-    it.each(ACTORS)(
-      '%s cannot open another user by putting their id in the profile path',
-      async (actor) => {
-        const response = await call(
-          actor,
-          'GET',
-          `/api/v1/me/${otherCustomer.id.toString()}`,
-        );
-
-        expect(response.status).toBe(404);
-        expectNoPerson(response.body, otherCustomer);
-      },
-    );
-
-    it.each([
-      {
-        label: 'booking detail',
-        method: 'GET' as const,
-        ownerUrl: `/api/v1/bookings/${OWNER_REFERENCE}`,
-        otherUrl: `/api/v1/bookings/${OTHER_REFERENCE}`,
-        readers: ['ADMIN', 'RECEPTIONIST'] as const,
-        denial: 'Booking not found',
-      },
-      {
-        label: 'confirmation',
-        method: 'GET' as const,
-        ownerUrl: `/api/v1/bookings/${OWNER_REFERENCE}/confirmation.pdf`,
-        otherUrl: `/api/v1/bookings/${OTHER_REFERENCE}/confirmation.pdf`,
-        readers: ['ADMIN', 'RECEPTIONIST'] as const,
-        denial: 'Booking not found',
-      },
-      {
-        label: 'cancel',
-        method: 'POST' as const,
-        ownerUrl: `/api/v1/bookings/${OWNER_REFERENCE}/cancel`,
-        otherUrl: `/api/v1/bookings/${OTHER_REFERENCE}/cancel`,
-        readers: ['ADMIN'] as const,
-        denial: 'Booking not found',
-      },
-      {
-        label: 'invoice',
-        method: 'GET' as const,
-        ownerUrl: `/api/v1/invoices/${OWNER_INVOICE}.pdf`,
-        otherUrl: `/api/v1/invoices/${OTHER_INVOICE}.pdf`,
-        readers: ['ADMIN', 'RECEPTIONIST'] as const,
-        denial: 'Invoice not found',
-      },
-    ] satisfies ObjectRoute[])(
-      '$label returns the owner and staff, and hides it from the other customer',
-      async (route) => {
-        const strangerDenied = await callAs(otherToken, route.method, route.ownerUrl);
-        expect(strangerDenied.status).toBe(404);
-        expect(strangerDenied.body.message).toBe(route.denial);
-        expectNoPerson(strangerDenied.body, users.CUSTOMER);
-
-        const ownerDenied = await call('CUSTOMER', route.method, route.otherUrl);
-        expect(ownerDenied.status).toBe(404);
-        expect(ownerDenied.body.message).toBe(route.denial);
-        expectNoPerson(ownerDenied.body, otherCustomer);
-
-        const ownerAllowed = await call('CUSTOMER', route.method, route.ownerUrl);
-        expect(ownerAllowed.status).toBe(501);
-        expectNoPerson(ownerAllowed.body, otherCustomer);
-
-        const anonymous = await call('anonymous', route.method, route.ownerUrl);
-        expect(anonymous.status).toBe(401);
-        expectNoPerson(anonymous.body, users.CUSTOMER);
-
-        for (const role of ['ADMIN', 'RECEPTIONIST'] as const) {
-          const response = await call(role, route.method, route.ownerUrl);
-          expect(response.status).toBe(route.readers.some((reader) => reader === role) ? 501 : 403);
-          expectNoPerson(response.body, users.CUSTOMER);
-          expectNoPerson(response.body, otherCustomer);
-        }
-      },
-    );
-  });
-
-  async function accessToken(email: string, password: string): Promise<string> {
-    const response = await api(app)
-      .post('/api/v1/auth/login')
-      .send({ email, password })
-      .expect(200);
-    return response.body.accessToken as string;
-  }
-
-  function call(
-    actor: Actor,
-    method: Method,
-    path: string,
-    body?: Record<string, unknown>,
-    query?: Record<string, string>,
-  ) {
-    const token = actor === 'anonymous' ? undefined : tokens[actor];
-    return callAs(token, method, path, body, query);
-  }
-
-  function callAs(
-    token: string | undefined,
-    method: Method,
-    path: string,
-    body?: Record<string, unknown>,
-    query?: Record<string, string>,
-  ) {
-    const request = api(app)[method.toLowerCase() as 'get' | 'post' | 'put' | 'patch' | 'delete'](
-      path,
-    );
-    if (token) request.set('Authorization', `Bearer ${token}`);
-    if (query) request.query(query);
-    if (body) request.send(body);
-    return request;
-  }
-});
-
-function concreteUrl(path: string): string {
-  return path
-    .replace(':id', '99999')
-    .replace(':reference', MISSING_REFERENCE)
-    .replace(':number.pdf', `${MISSING_INVOICE}.pdf`);
-}
-
-async function seedOwnedRecords(
-  owner: Account,
-  stranger: Account,
-  issuedById: bigint,
-): Promise<void> {
-  const category = await prisma.roomCategory.create({
-    data: { name: 'Access Matrix', nightlyPrice: '4000.00', capacity: 2 },
-  });
-  const [roomA, roomB] = await Promise.all([
-    prisma.room.create({
-      data: { number: '901', categoryId: category.id, floor: 9 },
-    }),
-    prisma.room.create({
-      data: { number: '902', categoryId: category.id, floor: 9 },
-    }),
-  ]);
-
-  await Promise.all([
-    createStay(owner, roomA.id, OWNER_REFERENCE, OWNER_INVOICE, issuedById),
-    createStay(stranger, roomB.id, OTHER_REFERENCE, OTHER_INVOICE, issuedById),
-  ]);
-}
-
-function createStay(
-  guest: Account,
-  roomId: number,
-  reference: string,
-  invoiceNumber: string,
-  issuedById: bigint,
-) {
-  return prisma.booking.create({
-    data: {
-      reference,
-      customerId: guest.id,
-      roomId,
-      checkIn: new Date('2026-12-01T12:00:00.000Z'),
-      checkOut: new Date('2026-12-02T12:00:00.000Z'),
-      guests: 1,
-      leadGuestName: guest.fullName,
-      leadGuestMobile: guest.mobile ?? '01700000000',
-      nightlyPrice: '4000.00',
-      totalAmount: '4000.00',
-      invoice: {
-        create: {
-          number: invoiceNumber,
-          totalAmount: '4000.00',
-          paidAmount: '4000.00',
-          issuedById,
-        },
-      },
-    },
-  });
-}
-
-function expectOwnProfile(body: unknown, user: Account): void {
-  expect(body).toMatchObject({
-    id: user.id.toString(),
-    fullName: user.fullName,
-    email: user.email,
-    role: user.role,
-    mustResetPw: false,
-  });
-  expectNoSecret(body);
-}
-
-function expectNoPerson(body: unknown, person: Account): void {
-  const text = JSON.stringify(body);
-  expect(text).not.toContain(person.email);
-  expect(text).not.toContain(person.fullName);
-  const mobile = person.mobile?.trim();
-  if (mobile) expect(text).not.toContain(mobile);
-}
-
-function expectNoSecret(body: unknown): void {
-  expect(JSON.stringify(body)).not.toMatch(
-    /passwordHash|password_hash|\$argon2|\$2[aby]\$/i,
-  );
-}
-
-type RouteLayer = {
-  route?: { path: string; methods: Record<string, boolean> };
-  handle?: { stack?: RouteLayer[] };
-};
-
-function mountedRoutes(app: TestApp): { method: string; path: string }[] {
-  const expressApp = app.getHttpAdapter().getInstance() as {
-    router?: { stack: RouteLayer[] };
-  };
-  const found: { method: string; path: string }[] = [];
-
-  const visit = (stack: RouteLayer[], prefix: string) => {
-    for (const layer of stack) {
-      if (layer.route?.path && !layer.route.path.includes('*')) {
-        const path = normalizePath(prefix + layer.route.path);
-        for (const [method, enabled] of Object.entries(layer.route.methods)) {
-          if (enabled && method !== 'head' && !method.startsWith('_')) {
-            found.push({ method: method.toUpperCase(), path });
-          }
-        }
-        continue;
-      }
-
-      const nested = layer.handle?.stack;
-      if (nested) visit(nested, prefix);
+        this.middlewareModule = new MiddlewareModule();
+        this.routesResolver = new RoutesResolver(this.container, this.config, this.injector, this.graphInspector);
     }
-  };
-
-  visit(expressApp.router?.stack ?? [], '');
-  return found.sort(byRoute);
-}
-
-function byRoute(
-  a: { method: string; path: string },
-  b: { method: string; path: string },
-): number {
-  return a.path.localeCompare(b.path) || a.method.localeCompare(b.method);
-}
-
-function normalizePath(path: string): string {
-  const collapsed = path.replace(/\/{2,}/g, '/');
-  if (collapsed.length > 1 && collapsed.endsWith('/')) return collapsed.slice(0, -1);
-  return collapsed || '/';
+    async prepareClose() {
+        this.httpAdapter && (await this.httpAdapter.beforeClose?.());
+    }
+    async dispose() {
+        await this.socketModule?.close();
+        await this.microservicesModule?.close();
+        await this.httpAdapter?.close();
+        this.isListening = false;
+        this.container.getHttpAdapterHostRef().listening = false;
+        await Promise.all(iterate(this.microservices).map(async (microservice) => {
+            microservice.setIsTerminated(true);
+            await microservice.close();
+        }));
+    }
+    getHttpAdapter() {
+        return this.httpAdapter;
+    }
+    registerHttpServer() {
+        this.httpServer = this.createServer();
+    }
+    getUnderlyingHttpServer() {
+        return this.httpAdapter.getHttpServer();
+    }
+    applyOptions() {
+        if (!this.appOptions || !this.appOptions.cors) {
+            return undefined;
+        }
+        const passCustomOptions = isObject(this.appOptions.cors) || isFunction(this.appOptions.cors);
+        if (!passCustomOptions) {
+            return this.enableCors();
+        }
+        return this.enableCors(this.appOptions.cors);
+    }
+    createServer() {
+        this.httpAdapter.initHttpServer(this.appOptions);
+        return this.httpAdapter.getHttpServer();
+    }
+    async registerModules() {
+        await this.registerWsModule();
+        if (this.microservicesModule) {
+            this.microservicesModule.register(this.container, this.graphInspector, this.config, this.appOptions);
+            this.microservicesModule.setupClients(this.container);
+        }
+        await this.middlewareModule.register(this.middlewareContainer, this.container, this.config, this.injector, this.httpAdapter, this.graphInspector, this.appOptions);
+    }
+    async registerWsModule() {
+        if (!this.socketModule) {
+            return;
+        }
+        await this.socketModule.register(this.container, this.config, this.graphInspector, this.appOptions, this.httpServer);
+        this.isWsModuleRegistered = true;
+    }
+    async init() {
+        if (this.isInitialized) {
+            return this;
+        }
+        try {
+            // Lazy-load optional modules (ESM-compatible)
+            await Promise.all([
+                this.loadSocketModule(),
+                this.loadMicroservicesModule(),
+            ]);
+            this.applyOptions();
+            this.securityHook?.init(this.config);
+            await this.httpAdapter?.init?.();
+            const useBodyParser = this.appOptions && this.appOptions.bodyParser !== false;
+            useBodyParser && this.registerParserMiddleware();
+            await this.registerModules();
+            await this.registerRouter();
+            await this.callInitHook();
+            await this.registerRouterHooks();
+            await this.callBootstrapHook();
+            this.isInitialized = true;
+            this.logger.log(MESSAGES.APPLICATION_READY);
+        }
+        finally {
+            // Without this, an application that is never started with "listen()"
+            // (e.g. serverless handlers, e2e tests) would buffer logs forever, and
+            // one that fails to initialize would never print them.
+            this.flushLogsIfAutoFlushEnabled();
+        }
+        return this;
+    }
+    registerParserMiddleware() {
+        const prefix = this.config.getGlobalPrefix();
+        const rawBody = !!this.appOptions?.rawBody;
+        this.httpAdapter.registerParserMiddleware(prefix, rawBody);
+    }
+    async registerRouter() {
+        await this.registerMiddleware(this.httpAdapter);
+        const prefix = this.config.getGlobalPrefix();
+        const basePath = addLeadingSlash(prefix);
+        const conflictPolicy = this.config.getRouteConflictPolicy();
+        const resolutionStrategy = this.config.getRouteResolutionStrategy();
+        const adapterIsOrderSensitive = this.httpAdapter.isRouteOrderSensitive?.() ?? true;
+        const shouldSortBySpecificity = resolutionStrategy === 'specificity' && adapterIsOrderSensitive;
+        // Adapters that are not order-sensitive (e.g. Fastify) currently
+        // also reject duplicate (method, URL) registrations synchronously
+        // from the underlying router. Treat the two properties as one
+        // signal until a separate capability flag is introduced.
+        const adapterRejectsDuplicates = !adapterIsOrderSensitive;
+        if (!conflictPolicy && !shouldSortBySpecificity) {
+            this.routesResolver.resolve(this.httpAdapter, basePath);
+            return;
+        }
+        // Defer registration whenever we collect routes for diagnostics or
+        // re-ordering. In particular, when a conflict policy is set we
+        // must run detection *before* the adapter sees any route, because
+        // duplicate-rejecting adapters like Fastify throw synchronously
+        // from `instance.route()` and would short-circuit both the resolve
+        // loop and the aggregated `RouteConflictException`.
+        const resolvedRoutes = [];
+        this.routesResolver.resolve(this.httpAdapter, basePath, {
+            onRouteResolved: route => resolvedRoutes.push(route),
+            deferRegistration: true,
+        });
+        // Sort before conflict detection so that winner/shadowed pairs in every
+        // conflict record reflect actual adapter registration order. Without this,
+        // the reported winner could be the declaration-first (less-specific) route
+        // even though the sorted-first (more-specific) route is what really wins.
+        const orderedRoutes = shouldSortBySpecificity
+            ? RouteSpecificitySorter.sort(resolvedRoutes)
+            : resolvedRoutes;
+        const routesToSkip = new Set();
+        if (conflictPolicy) {
+            const conflicts = RouteConflictDetector.detect(orderedRoutes, this.config.getVersioning());
+            // On adapters that reject duplicate registrations the policy
+            // cannot be honoured by simply logging — the adapter would
+            // throw on the second `instance.route()` call. Drop the
+            // shadowed route of every duplicate conflict so the detector
+            // (not the adapter) decides which one wins. The detector
+            // always picks the earlier-registered route as the winner.
+            if (adapterRejectsDuplicates) {
+                conflicts.forEach(conflict => {
+                    if (conflict.kind === 'duplicate') {
+                        routesToSkip.add(conflict.shadowed);
+                    }
+                });
+            }
+            // When specificity sorting is active, shadow conflicts where the sort
+            // promoted the winner (declared later but more specific) are resolved
+            // at runtime: the more-specific route is first-registered and handles
+            // its requests, the less-specific route handles the rest. Filtering
+            // these out prevents shadow: 'error' from aborting an app whose routes
+            // work correctly after specificity ordering. Genuine shadows — where the
+            // winner was already first in declaration order and the sort did not help
+            // — are kept and still apply the configured policy.
+            //
+            // Adapters that are not order-sensitive pick the most specific route,
+            // so a shadow is only real there between routes that differ by their
+            // parameter names alone ("/users/:id" and "/users/:username").
+            const effectiveConflicts = shouldSortBySpecificity
+                ? RouteConflictDetector.filterSortResolvedShadows(conflicts, resolvedRoutes)
+                : adapterIsOrderSensitive
+                    ? conflicts
+                    : conflicts.filter(conflict => conflict.kind === 'duplicate' ||
+                        RouteConflictDetector.pathsHaveSameShape(conflict.winner.path, conflict.shadowed.path));
+            RouteConflictDetector.handle(effectiveConflicts, conflictPolicy, this.logger);
+        }
+        orderedRoutes.forEach(route => {
+            if (routesToSkip.has(route))
+                return;
+            this.routesResolver.registerResolvedRoute(this.httpAdapter, route);
+        });
+    }
+    async registerRouterHooks() {
+        this.routesResolver.registerNotFoundHandler();
+        this.routesResolver.registerExceptionHandler();
+    }
+    connectMicroservice(microserviceOptions, hybridAppOptions = {}) {
+        const { NestMicroservice } = loadPackageCached('@nestjs/microservices', 'NestFactory');
+        const { inheritAppConfig } = hybridAppOptions;
+        const applicationConfig = inheritAppConfig
+            ? this.config
+            : new ApplicationConfig();
+        const instance = new NestMicroservice(this.container, microserviceOptions, this.graphInspector, applicationConfig);
+        // Optional call, as an older "@nestjs/microservices" may not implement it
+        instance.setIsConnectedToApplication?.(true);
+        if (!hybridAppOptions.deferInitialization) {
+            instance.registerListeners();
+            instance.setIsInitialized(true);
+            instance.setIsInitHookCalled(true);
+        }
+        this.microservices.push(instance);
+        return instance;
+    }
+    getMicroservices() {
+        return this.microservices;
+    }
+    getHttpServer() {
+        return this.httpServer;
+    }
+    async startAllMicroservices() {
+        this.assertNotInPreviewMode('startAllMicroservices');
+        await Promise.all(this.microservices.map(msvc => msvc.listen()));
+        return this;
+    }
+    use(...args) {
+        this.httpAdapter.use(...this.applyFunctionDecoratorIfRegistered(args));
+        return this;
+    }
+    useBodyParser(...args) {
+        if (!('useBodyParser' in this.httpAdapter)) {
+            this.logger.warn('Your HTTP Adapter does not support `.useBodyParser`.');
+            return this;
+        }
+        const [parserType, ...otherArgs] = args;
+        const rawBody = !!this.appOptions.rawBody;
+        this.httpAdapter.useBodyParser?.(...[parserType, rawBody, ...otherArgs]);
+        return this;
+    }
+    enableCors(options) {
+        this.httpAdapter.enableCors(options);
+    }
+    enableCsrfProtection(options) {
+        this.assertSecurityFeatureCanBeEnabled('enableCsrfProtection');
+        const protection = new CrossOriginProtection(this.httpAdapter, options);
+        this.getSecurityHook().setCrossOriginProtection(protection);
+        this.enabledSecurityFeatures.add('enableCsrfProtection');
+        return this;
+    }
+    useSecurityHeaders(options) {
+        this.assertSecurityFeatureCanBeEnabled('useSecurityHeaders');
+        const headers = resolveSecurityHeaders(options);
+        this.getSecurityHook().setHeaders(headers);
+        if (headers.removeHeaders.includes('X-Powered-By')) {
+            // Express sets the header before any middleware runs, so the hook alone
+            // misses responses ended by middleware registered ahead of the hook.
+            this.httpAdapter.disable?.('x-powered-by');
+        }
+        this.enabledSecurityFeatures.add('useSecurityHeaders');
+        return this;
+    }
+    enableVersioning(options = { type: VersioningType.URI }) {
+        this.config.enableVersioning(options);
+        return this;
+    }
+    async listen(port, ...args) {
+        this.assertNotInPreviewMode('listen');
+        if (!this.isInitialized) {
+            await this.init();
+        }
+        const httpAdapterHost = this.container.getHttpAdapterHostRef();
+        return new Promise((resolve, reject) => {
+            const errorHandler = (e) => {
+                this.logger.error(e?.toString?.());
+                reject(e);
+            };
+            this.httpServer.once('error', errorHandler);
+            const isCallbackInOriginalArgs = isFunction(args[args.length - 1]);
+            const listenFnArgs = isCallbackInOriginalArgs
+                ? args.slice(0, args.length - 1)
+                : args;
+            this.httpAdapter.listen(port, ...listenFnArgs, (...originalCallbackArgs) => {
+                this.flushLogsIfAutoFlushEnabled();
+                if (originalCallbackArgs[0] instanceof Error) {
+                    return reject(originalCallbackArgs[0]);
+                }
+                const address = this.httpServer.address();
+                if (address) {
+                    this.httpServer.removeListener('error', errorHandler);
+                    this.isListening = true;
+                    httpAdapterHost.listening = true;
+                    resolve(this.httpServer);
+                }
+                if (isCallbackInOriginalArgs) {
+                    args[args.length - 1](...originalCallbackArgs);
+                }
+            });
+        });
+    }
+    async getUrl() {
+        return new Promise((resolve, reject) => {
+            if (!this.isListening) {
+                this.logger.error(MESSAGES.CALL_LISTEN_FIRST);
+                reject(MESSAGES.CALL_LISTEN_FIRST);
+                return;
+            }
+            const address = this.httpServer.address();
+            resolve(this.formatAddress(address));
+        });
+    }
+    formatAddress(address) {
+        if (isString(address)) {
+            if (platform() === 'win32') {
+                return address;
+            }
+            const basePath = encodeURIComponent(address);
+            return `${this.getProtocol()}+unix://${basePath}`;
+        }
+        let host = this.host();
+        if (address && address.family === 'IPv6') {
+            if (host === '::') {
+                host = '[::1]';
+            }
+            else {
+                host = `[${host}]`;
+            }
+        }
+        else if (host === '0.0.0.0') {
+            host = '127.0.0.1';
+        }
+        return `${this.getProtocol()}://${host}:${address.port}`;
+    }
+    setGlobalPrefix(prefix, options) {
+        this.config.setGlobalPrefix(prefix);
+        if (options) {
+            const exclude = options?.exclude
+                ? mapToExcludeRoute(options.exclude)
+                : [];
+            this.config.setGlobalPrefixOptions({
+                ...options,
+                exclude,
+            });
+        }
+        return this;
+    }
+    useWebSocketAdapter(adapter) {
+        if (this.isWsModuleRegistered) {
+            this.logger.warn('useWebSocketAdapter() was called after WebSocket gateways were already initialized. The provided adapter will be stored but will NOT be applied to existing gateways — they remain bound to the previously installed adapter. To install a custom adapter, call app.useWebSocketAdapter(...) BEFORE app.init() (or app.listen()).');
+        }
+        this.config.setIoAdapter(adapter);
+        return this;
+    }
+    useGlobalFilters(...filters) {
+        filters = this.applyInstanceDecoratorIfRegistered(...filters);
+        this.config.useGlobalFilters(...filters);
+        filters.forEach(item => this.graphInspector.insertOrphanedEnhancer({
+            subtype: 'filter',
+            ref: item,
+        }));
+        return this;
+    }
+    useGlobalPipes(...pipes) {
+        pipes = this.applyInstanceDecoratorIfRegistered(...pipes);
+        this.config.useGlobalPipes(...pipes);
+        pipes.forEach(item => this.graphInspector.insertOrphanedEnhancer({
+            subtype: 'pipe',
+            ref: item,
+        }));
+        return this;
+    }
+    useGlobalInterceptors(...interceptors) {
+        interceptors = this.applyInstanceDecoratorIfRegistered(...interceptors);
+        this.config.useGlobalInterceptors(...interceptors);
+        interceptors.forEach(item => this.graphInspector.insertOrphanedEnhancer({
+            subtype: 'interceptor',
+            ref: item,
+        }));
+        return this;
+    }
+    useGlobalGuards(...guards) {
+        guards = this.applyInstanceDecoratorIfRegistered(...guards);
+        this.config.useGlobalGuards(...guards);
+        guards.forEach(item => this.graphInspector.insertOrphanedEnhancer({
+            subtype: 'guard',
+            ref: item,
+        }));
+        return this;
+    }
+    useStaticAssets(pathOrOptions, options) {
+        this.httpAdapter.useStaticAssets?.(pathOrOptions, options);
+        return this;
+    }
+    setBaseViewsDir(path) {
+        this.httpAdapter.setBaseViewsDir?.(path);
+        return this;
+    }
+    setViewEngine(engineOrOptions) {
+        this.httpAdapter.setViewEngine?.(engineOrOptions);
+        return this;
+    }
+    /**
+     * Pre-loads `@nestjs/microservices` so that `connectMicroservice()` can read
+     * it synchronously from the package cache.
+     *
+     * `@nestjs/platform-express` is deliberately not preloaded here: on this path
+     * the HTTP adapter has already been created (or passed in) by
+     * `NestFactory.create()` before this runs, and `TestingModule` preloads the
+     * package itself in `compile()`. Importing it here would load Express,
+     * body-parser and multer into every process that uses another adapter.
+     */
+    async preloadLazyPackages() {
+        // Best-effort: silently swallow if the package is not installed
+        await tryLoadPackage('@nestjs/microservices', () => import('@nestjs/microservices'));
+    }
+    /**
+     * Builds the cookie signer from the `cookies.secret` option and shares it
+     * between the route params factory (through the config), which verifies
+     * signed cookies, and the HTTP adapter, which signs them in `setCookie()`.
+     */
+    applyCookiesOptions(appOptions) {
+        const secret = appOptions.cookies?.secret;
+        if (secret === undefined) {
+            return;
+        }
+        const signer = new CookieSigner(secret);
+        this.config.setCookieSigner(signer);
+        // Duck-typed: the adapter may be a custom `HttpServer` that does not
+        // extend `AbstractHttpAdapter`, or come from another copy of @nestjs/core.
+        this.httpAdapter.setCookieSigner?.(signer);
+    }
+    host() {
+        const address = this.httpServer.address();
+        if (isString(address)) {
+            return undefined;
+        }
+        return address && address.address;
+    }
+    getProtocol() {
+        // Read from the server: `httpsOptions` is not the only way to serve HTTPS,
+        // the Fastify adapter takes its own `https` option and ignores this one.
+        // `https.Server` and `http2.Http2SecureServer` both extend `tls.Server`.
+        return this.httpServer instanceof TlsServer ? 'https' : 'http';
+    }
+    /**
+     * Request-level security features are installed as a framework middleware
+     * or hook. After `init()` it would land behind the routes (Express) or be
+     * rejected by the framework (Fastify), leaving routes silently unprotected,
+     * so they fail loudly instead. A second call is rejected as well, as it
+     * would silently replace the first configuration.
+     */
+    assertSecurityFeatureCanBeEnabled(methodName) {
+        if (!this.httpAdapter.registerSecurityHook) {
+            throw new Error(`Your HTTP Adapter does not support \`.${methodName}()\`.`);
+        }
+        if (this.isInitialized) {
+            throw new Error(`app.${methodName}() must be called before app.init() / app.listen().`);
+        }
+        if (this.enabledSecurityFeatures.has(methodName)) {
+            throw new Error(`app.${methodName}() can only be called once.`);
+        }
+    }
+    /**
+     * Both security features share one request hook, so that they run in a
+     * fixed order (headers, then the CSRF check) whichever is enabled first.
+     * It is registered with the adapter the first time either is enabled,
+     * i.e. at that position in the middleware chain.
+     */
+    getSecurityHook() {
+        if (!this.securityHook) {
+            const hook = new HttpSecurityHook();
+            this.httpAdapter.registerSecurityHook((request, response) => hook.handle(request, response));
+            this.securityHook = hook;
+        }
+        return this.securityHook;
+    }
+    async registerMiddleware(instance) {
+        await this.middlewareModule.registerMiddleware(this.middlewareContainer, instance);
+    }
+    applyInstanceDecoratorIfRegistered(...instances) {
+        if (this.appOptions.instrument?.instanceDecorator) {
+            const decorate = makeSafeInstanceDecorator(this.appOptions.instrument.instanceDecorator);
+            return instances.map(instance => decorate(instance));
+        }
+        return instances;
+    }
+    applyFunctionDecoratorIfRegistered(args) {
+        if (!this.appOptions.instrument?.instanceDecorator) {
+            return args;
+        }
+        const decorate = makeSafeInstanceDecorator(this.appOptions.instrument.instanceDecorator);
+        // Decorators may return a non-function value for plain middleware
+        // functions; fall back to the original argument so the HTTP adapter
+        // always receives a valid handler.
+        const decorateFunction = (arg) => {
+            if (!isFunction(arg)) {
+                return arg;
+            }
+            const decorated = decorate(arg);
+            return isFunction(decorated) ? decorated : arg;
+        };
+        // Map over the original arguments to preserve arity: appending a trailing
+        // `undefined` to a single-argument `use(fn)` call would make Express 5's
+        // router throw "argument handler must be a function".
+        return args.map(decorateFunction);
+    }
+    async loadSocketModule() {
+        if (!this.socketModule) {
+            const socketModule = await optionalRequire('@nestjs/websockets/socket-module', () => import('@nestjs/websockets/socket-module.js'));
+            if (socketModule?.SocketModule) {
+                this.socketModule = new socketModule.SocketModule();
+            }
+        }
+    }
+    async loadMicroservicesModule() {
+        if (!this.microservicesModule) {
+            const msModule = await optionalRequire('@nestjs/microservices/microservices-module', () => import('@nestjs/microservices/microservices-module.js'));
+            if (msModule?.MicroservicesModule) {
+                this.microservicesModule = new msModule.MicroservicesModule();
+                // Pre-cache the main barrel so connectMicroservice() can stay synchronous
+                await loadPackage('@nestjs/microservices', 'NestFactory', () => import('@nestjs/microservices'));
+            }
+        }
+    }
 }
