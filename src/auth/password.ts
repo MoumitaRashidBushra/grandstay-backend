@@ -9,12 +9,12 @@ export const PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d).{8,64}$/;
 export const PASSWORD_MESSAGE =
   'password must be 8-64 characters and include a letter and a digit';
 
-const ARGON2_OPTIONS: argon2.Options = {
+const ARGON2_OPTIONS = {
   type: argon2.argon2id,
   memoryCost: 19456,
   timeCost: 2,
   parallelism: 1,
-};
+} satisfies argon2.HashOptions;
 
 export function assertPasswordPolicy(password: string): void {
   if (!PASSWORD_PATTERN.test(password)) {

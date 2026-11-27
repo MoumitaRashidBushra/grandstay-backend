@@ -2,6 +2,15 @@ import { BadRequestException, type PipeTransform, type ValidationError } from '@
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 
+export function isEmptyBody(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
+}
+
 export function validationException(errors: ValidationError[]): BadRequestException {
   return new BadRequestException({
     statusCode: 400,

@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import { RegisterDto } from './dto/register.dto.js';
+import { RegisterDto } from '../dto/register.dto.js';
 import { validatedBody } from './validated-body.pipe.js';
 
 describe('validatedBody', () => {

@@ -1,10 +1,11 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { AuthService, AccountLockedException } from './auth.service.js';
-import { LoginDto } from './dto/login.dto.js';
-import { RegisterDto } from './dto/register.dto.js';
-import { validatedBody } from './validated-body.pipe.js';
+import { AuthService, AccountLockedException} from '../../services/auth/auth.service.js';
+import { LoginDto } from '../../dto/login.dto.js';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Public } from '../../auth/decorators/public.decorator.js';
+import { HttpCode, HttpStatus } from '@nestjs/common';
+
 
 const refreshCookieOptions = {
   httpOnly: true,
@@ -18,17 +19,21 @@ const refreshCookieOptions = {
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post('register')
-  register(@Body(validatedBody(RegisterDto)) dto: RegisterDto) {
-    return this.authService.register(dto);
-  }
+  //Only login endpoint
+  /*@Post('login') //creates a POST endpoint.
+  async login(@Body() loginDto: LoginDto) {
+    return this.authService.login(loginDto);
+    //@Body() extracts the JSON request body.
+    //LoginDto validates the incoming data through your global ValidationPipe.
+  }*/
 
+  @Public()
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @HttpCode(HttpStatus.OK)
   @Post('login')
+  @HttpCode(HttpStatus.OK)
   async login(
-    @Body(validatedBody(LoginDto)) loginDto: LoginDto,
+    @Body() loginDto: LoginDto,
     @Res({ passthrough: true }) res: Response,
   ) {
     //res: Response makes the response object available inside the entire method, including catch.
@@ -53,7 +58,7 @@ export class AuthController {
     }
   }
 
-  @HttpCode(HttpStatus.OK)
+  @Public()
   @Post('refresh')
   async refresh(
     @Req() req: Request,
@@ -70,8 +75,8 @@ export class AuthController {
       accessToken: result.accessToken,
     };
   }
-
-  @HttpCode(HttpStatus.OK)
+  
+  @Public()
   @Post('logout') //Creates the logout POST endpoint.
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     //@Req() req:	Accesses the incoming HTTP request.
