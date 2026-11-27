@@ -28,3 +28,6 @@ function databaseUrlFromAppEnv(): string | undefined {
   }
   return value || undefined;
 }
+import { loadTestEnvironment } from './load-test-env.js';
+
+loadTestEnvironment();
