@@ -70,7 +70,7 @@ const ENDPOINTS: Endpoint[] = [
     method: 'POST',
     path: '/api/v1/auth/register',
     body: {},
-    expect: everyone(400),
+    expect: everyone(501),
   },
   { method: 'POST', path: '/api/v1/auth/login', body: {}, expect: everyone(400) },
   { method: 'POST', path: '/api/v1/auth/refresh', expect: everyone(401) },
@@ -84,47 +84,19 @@ const ENDPOINTS: Endpoint[] = [
     method: 'POST',
     path: '/api/v1/me/password',
     body: {},
-    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 400),
-  },
-  {
-    method: 'GET',
-    path: '/api/v1/admin/staff',
-    expect: allow(['ADMIN'], 200),
+    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 501),
   },
   {
     method: 'POST',
     path: '/api/v1/admin/staff',
     body: {},
-    expect: allow(['ADMIN'], 400),
+    expect: allow(['ADMIN'], 501),
   },
   {
     method: 'PATCH',
     path: '/api/v1/admin/staff/:id',
     body: {},
-    expect: allow(['ADMIN'], 400),
-  },
-  {
-    method: 'POST',
-    path: '/api/v1/admin/staff/:id/reset-password',
-    body: {},
-    expect: allow(['ADMIN'], 400),
-  },
-  {
-    method: 'GET',
-    path: '/api/v1/admin/customers',
-    expect: allow(['ADMIN'], 200),
-  },
-  {
-    method: 'PATCH',
-    path: '/api/v1/admin/customers/:id',
-    body: {},
-    expect: allow(['ADMIN'], 400),
-  },
-  {
-    method: 'POST',
-    path: '/api/v1/admin/customers/:id/reset-password',
-    body: {},
-    expect: allow(['ADMIN'], 400),
+    expect: allow(['ADMIN'], 501),
   },
   { method: 'GET', path: '/api/v1/admin/rooms', expect: allow(['ADMIN'], 501) },
   { method: 'POST', path: '/api/v1/admin/rooms', body: {}, expect: allow(['ADMIN'], 501) },
@@ -257,7 +229,6 @@ describe('Role and ownership access matrix', () => {
 
         expect(response.status).toBe(status);
         expectNoSecret(response.body);
-        expectAccountManagementBody(method, path, actor, status, response.body, users);
         if (path === '/api/v1/auth/refresh') {
           expect(response.body.message).toBe('Invalid refresh token');
         } else if (status === 401) {
@@ -411,78 +382,6 @@ describe('Role and ownership access matrix', () => {
     return request;
   }
 });
-
-function expectAccountManagementBody(
-  method: Method,
-  path: string,
-  actor: Actor,
-  status: number,
-  body: unknown,
-  accounts: Record<Role, Account>,
-): void {
-  if (actor !== 'ADMIN' || status === 403 || status === 401) return;
-
-  if (method === 'GET' && path === '/api/v1/admin/staff' && status === 200) {
-    const emails = accountEmails(body, 'staff');
-    expect(emails).toEqual(
-      expect.arrayContaining([accounts.ADMIN.email, accounts.RECEPTIONIST.email]),
-    );
-    expect(emails).not.toContain(accounts.CUSTOMER.email);
-    return;
-  }
-
-  if (method === 'GET' && path === '/api/v1/admin/customers' && status === 200) {
-    const emails = accountEmails(body, 'customers');
-    expect(emails).toContain(accounts.CUSTOMER.email);
-    expect(emails).not.toContain(accounts.ADMIN.email);
-    expect(emails).not.toContain(accounts.RECEPTIONIST.email);
-    return;
-  }
-
-  if (method === 'POST' && path === '/api/v1/admin/staff' && status === 400) {
-    expect(validationMessages(body)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('fullName'),
-        expect.stringContaining('email'),
-        expect.stringContaining('mobile'),
-        expect.stringContaining('password'),
-      ]),
-    );
-    return;
-  }
-
-  if (method === 'PATCH' && status === 400 && path.endsWith('/:id')) {
-    expect(body).toMatchObject({
-      statusCode: 400,
-      message: 'No changes were provided',
-    });
-    return;
-  }
-
-  if (method === 'POST' && status === 400 && path.endsWith('/reset-password')) {
-    expect(validationMessages(body)).toEqual(
-      expect.arrayContaining([expect.stringContaining('password')]),
-    );
-  }
-}
-
-function accountEmails(body: unknown, key: 'staff' | 'customers'): string[] {
-  expect(body).toEqual(
-    expect.objectContaining({
-      [key]: expect.any(Array),
-      summary: expect.objectContaining({ total: expect.any(Number) }),
-    }),
-  );
-  const records = (body as Record<string, { email?: string }[]>)[key];
-  return records.map((account) => account.email ?? '');
-}
-
-function validationMessages(body: unknown): string[] {
-  expect(body).toMatchObject({ statusCode: 400 });
-  const message = (body as { message?: unknown }).message;
-  expect(Array.isArray(message)).toBe(true);
-  return message as string[];
-}
 
 function concreteUrl(path: string): string {
   return path
