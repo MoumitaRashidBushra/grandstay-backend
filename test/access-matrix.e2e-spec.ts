@@ -1,5 +1,4 @@
 import { ThrottlerGuard } from '@nestjs/throttler';
-import type { User } from '@prisma/client';
 import type { TestApp } from './utils/app.js';
 import { api, createTestApp } from './utils/app.js';
 import { disconnectDatabase, prisma, resetDatabase } from './utils/db.js';
@@ -20,7 +19,7 @@ type Actor = Role | 'anonymous';
 
 const ACTORS: Actor[] = ['anonymous', ...ROLES];
 
-type Account = User & { password: string };
+type Account = Awaited<ReturnType<typeof createAdmin>> & { password: string };
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 type Endpoint = {
@@ -45,7 +44,10 @@ const everyone = (status: number): Record<Actor, number> => ({
   CUSTOMER: status,
 });
 
-const allow = (roles: readonly Role[], granted: number): Record<Actor, number> => ({
+const allow = (
+  roles: readonly Role[],
+  granted: number,
+): Record<Actor, number> => ({
   anonymous: 401,
   ADMIN: roles.includes('ADMIN') ? granted : 403,
   RECEPTIONIST: roles.includes('RECEPTIONIST') ? granted : 403,
@@ -57,7 +59,12 @@ const ENDPOINTS: Endpoint[] = [
   { method: 'GET', path: '/api/v1/health', expect: everyone(200) },
   { method: 'GET', path: '/api/v1/ready', expect: everyone(200) },
   { method: 'GET', path: '/api/v1/settings', expect: everyone(200) },
-  { method: 'PUT', path: '/api/v1/settings', body: {}, expect: allow(['ADMIN'], 501) },
+  {
+    method: 'PUT',
+    path: '/api/v1/settings',
+    body: {},
+    expect: allow(['ADMIN'], 501),
+  },
   { method: 'GET', path: '/api/v1/categories', expect: everyone(200) },
   { method: 'GET', path: '/api/v1/categories/:id', expect: everyone(200) },
   {
@@ -71,9 +78,14 @@ const ENDPOINTS: Endpoint[] = [
     method: 'POST',
     path: '/api/v1/auth/register',
     body: {},
-    expect: everyone(501),
+    expect: everyone(400),
   },
-  { method: 'POST', path: '/api/v1/auth/login', body: {}, expect: everyone(400) },
+  {
+    method: 'POST',
+    path: '/api/v1/auth/login',
+    body: {},
+    expect: everyone(400),
+  },
   { method: 'POST', path: '/api/v1/auth/refresh', expect: everyone(401) },
   { method: 'POST', path: '/api/v1/auth/logout', expect: everyone(201) },
   {
@@ -85,45 +97,99 @@ const ENDPOINTS: Endpoint[] = [
     method: 'POST',
     path: '/api/v1/me/password',
     body: {},
-    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 501),
+    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 400),
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/staff',
+    expect: allow(['ADMIN'], 200),
   },
   {
     method: 'POST',
     path: '/api/v1/admin/staff',
     body: {},
-    expect: allow(['ADMIN'], 501),
+    expect: allow(['ADMIN'], 400),
   },
   {
     method: 'PATCH',
     path: '/api/v1/admin/staff/:id',
     body: {},
-    expect: allow(['ADMIN'], 501),
+    expect: allow(['ADMIN'], 400),
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/admin/staff/:id/reset-password',
+    body: {},
+    expect: allow(['ADMIN'], 400),
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/customers',
+    expect: allow(['ADMIN'], 200),
+  },
+  {
+    method: 'PATCH',
+    path: '/api/v1/admin/customers/:id',
+    body: {},
+    expect: allow(['ADMIN'], 400),
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/admin/customers/:id/reset-password',
+    body: {},
+    expect: allow(['ADMIN'], 400),
   },
   { method: 'GET', path: '/api/v1/admin/rooms', expect: allow(['ADMIN'], 501) },
-  { method: 'POST', path: '/api/v1/admin/rooms', body: {}, expect: allow(['ADMIN'], 501) },
-  { method: 'GET', path: '/api/v1/admin/rooms/:id', expect: allow(['ADMIN'], 501) },
+  {
+    method: 'POST',
+    path: '/api/v1/admin/rooms',
+    body: {},
+    expect: allow(['ADMIN'], 501),
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/rooms/:id',
+    expect: allow(['ADMIN'], 501),
+  },
   {
     method: 'PATCH',
     path: '/api/v1/admin/rooms/:id',
     body: {},
     expect: allow(['ADMIN'], 501),
   },
-  { method: 'DELETE', path: '/api/v1/admin/rooms/:id', expect: allow(['ADMIN'], 501) },
+  {
+    method: 'DELETE',
+    path: '/api/v1/admin/rooms/:id',
+    expect: allow(['ADMIN'], 501),
+  },
   {
     method: 'POST',
     path: '/api/v1/admin/rooms/:id/status',
     body: {},
     expect: allow(['ADMIN'], 501),
   },
-  { method: 'GET', path: '/api/v1/admin/reservations', expect: allow(['ADMIN'], 501) },
-  { method: 'GET', path: '/api/v1/admin/dashboard', expect: allow(['ADMIN'], 501) },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/reservations',
+    expect: allow(['ADMIN'], 501),
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/dashboard',
+    expect: allow(['ADMIN'], 501),
+  },
   {
     method: 'POST',
     path: '/api/v1/bookings/quote',
     body: {},
     expect: allow(['CUSTOMER'], 501),
   },
-  { method: 'POST', path: '/api/v1/bookings', body: {}, expect: allow(['CUSTOMER'], 501) },
+  {
+    method: 'POST',
+    path: '/api/v1/bookings',
+    body: {},
+    expect: allow(['CUSTOMER'], 501),
+  },
   { method: 'GET', path: '/api/v1/bookings', expect: allow(['CUSTOMER'], 501) },
   {
     method: 'GET',
@@ -143,8 +209,16 @@ const ENDPOINTS: Endpoint[] = [
     expect: allow(['ADMIN', 'CUSTOMER'], 404),
     notFound: 'Booking not found',
   },
-  { method: 'GET', path: '/api/v1/desk/bookings', expect: allow(['ADMIN', 'RECEPTIONIST'], 501) },
-  { method: 'GET', path: '/api/v1/desk/arrivals', expect: allow(['ADMIN', 'RECEPTIONIST'], 501) },
+  {
+    method: 'GET',
+    path: '/api/v1/desk/bookings',
+    expect: allow(['ADMIN', 'RECEPTIONIST'], 501),
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/desk/arrivals',
+    expect: allow(['ADMIN', 'RECEPTIONIST'], 501),
+  },
   {
     method: 'GET',
     path: '/api/v1/desk/departures',
@@ -169,7 +243,11 @@ const ENDPOINTS: Endpoint[] = [
 ];
 
 const MATRIX = ENDPOINTS.flatMap((endpoint) =>
-  ACTORS.map((actor) => ({ ...endpoint, actor, status: endpoint.expect[actor] })),
+  ACTORS.map((actor) => ({
+    ...endpoint,
+    actor,
+    status: endpoint.expect[actor],
+  })),
 );
 
 type ObjectRoute = {
@@ -190,7 +268,9 @@ describe('Role and ownership access matrix', () => {
 
   beforeAll(async () => {
     app = await createTestApp((builder) =>
-      builder.overrideGuard(ThrottlerGuard).useValue({ canActivate: () => true }),
+      builder
+        .overrideGuard(ThrottlerGuard)
+        .useValue({ canActivate: () => true }),
     );
     await resetDatabase();
 
@@ -206,7 +286,10 @@ describe('Role and ownership access matrix', () => {
 
     tokens = {
       ADMIN: await accessToken(admin.email, admin.password),
-      RECEPTIONIST: await accessToken(receptionist.email, receptionist.password),
+      RECEPTIONIST: await accessToken(
+        receptionist.email,
+        receptionist.password,
+      ),
       CUSTOMER: await accessToken(customer.email, customer.password),
     };
     otherToken = await accessToken(stranger.email, stranger.password);
@@ -219,7 +302,10 @@ describe('Role and ownership access matrix', () => {
 
   describe('NFR-SEC-03 every endpoint and role', () => {
     it('covers every mounted route', () => {
-      const expected = ENDPOINTS.map(({ method, path }) => ({ method, path })).sort(byRoute);
+      const expected = ENDPOINTS.map(({ method, path }) => ({
+        method,
+        path,
+      })).sort(byRoute);
       expect(mountedRoutes(app)).toEqual(expected);
     });
 
@@ -230,6 +316,14 @@ describe('Role and ownership access matrix', () => {
 
         expect(response.status).toBe(status);
         expectNoSecret(response.body);
+        expectAccountManagementBody(
+          method,
+          path,
+          actor,
+          status,
+          response.body,
+          users,
+        );
         if (path === '/api/v1/auth/refresh') {
           expect(response.body.message).toBe('Invalid refresh token');
         } else if (status === 401) {
@@ -249,7 +343,8 @@ describe('Role and ownership access matrix', () => {
           const payload = JSON.stringify(response.body);
           expect(payload).not.toContain(otherCustomer.email);
           for (const role of ROLES) {
-            if (role !== actor) expect(payload).not.toContain(users[role].email);
+            if (role !== actor)
+              expect(payload).not.toContain(users[role].email);
           }
         }
       },
@@ -320,17 +415,29 @@ describe('Role and ownership access matrix', () => {
     ] satisfies ObjectRoute[])(
       '$label returns the owner and staff, and hides it from the other customer',
       async (route) => {
-        const strangerDenied = await callAs(otherToken, route.method, route.ownerUrl);
+        const strangerDenied = await callAs(
+          otherToken,
+          route.method,
+          route.ownerUrl,
+        );
         expect(strangerDenied.status).toBe(404);
         expect(strangerDenied.body.message).toBe(route.denial);
         expectNoPerson(strangerDenied.body, users.CUSTOMER);
 
-        const ownerDenied = await call('CUSTOMER', route.method, route.otherUrl);
+        const ownerDenied = await call(
+          'CUSTOMER',
+          route.method,
+          route.otherUrl,
+        );
         expect(ownerDenied.status).toBe(404);
         expect(ownerDenied.body.message).toBe(route.denial);
         expectNoPerson(ownerDenied.body, otherCustomer);
 
-        const ownerAllowed = await call('CUSTOMER', route.method, route.ownerUrl);
+        const ownerAllowed = await call(
+          'CUSTOMER',
+          route.method,
+          route.ownerUrl,
+        );
         expect(ownerAllowed.status).toBe(501);
         expectNoPerson(ownerAllowed.body, otherCustomer);
 
@@ -340,12 +447,88 @@ describe('Role and ownership access matrix', () => {
 
         for (const role of ['ADMIN', 'RECEPTIONIST'] as const) {
           const response = await call(role, route.method, route.ownerUrl);
-          expect(response.status).toBe(route.readers.some((reader) => reader === role) ? 501 : 403);
+          expect(response.status).toBe(
+            route.readers.some((reader) => reader === role) ? 501 : 403,
+          );
           expectNoPerson(response.body, users.CUSTOMER);
           expectNoPerson(response.body, otherCustomer);
         }
       },
     );
+  });
+
+  it('allows Admin to manage staff and customer accounts through the API', async () => {
+    const createdStaff = await call('ADMIN', 'POST', '/api/v1/admin/staff', {
+      fullName: 'Access Matrix Receptionist',
+      email: 'access-matrix.receptionist@example.com',
+      mobile: '01711110000',
+      password: 'Temporary@123',
+    });
+
+    expect(createdStaff.status).toBe(201);
+    expectNoSecret(createdStaff.body);
+    expect(createdStaff.body).toMatchObject({
+      fullName: 'Access Matrix Receptionist',
+      email: 'access-matrix.receptionist@example.com',
+      role: 'RECEPTIONIST',
+      isActive: true,
+      mustResetPw: true,
+    });
+
+    const staffId = createdStaff.body.id as string;
+    const updatedStaff = await call(
+      'ADMIN',
+      'PATCH',
+      `/api/v1/admin/staff/${staffId}`,
+      { fullName: 'Updated Access Matrix Receptionist' },
+    );
+    expect(updatedStaff.status).toBe(200);
+    expect(updatedStaff.body).toMatchObject({
+      id: staffId,
+      fullName: 'Updated Access Matrix Receptionist',
+      role: 'RECEPTIONIST',
+    });
+
+    const resetStaffPassword = await call(
+      'ADMIN',
+      'POST',
+      `/api/v1/admin/staff/${staffId}/reset-password`,
+      { password: 'Replacement@123' },
+    );
+    expect(resetStaffPassword.status).toBe(201);
+    expect(resetStaffPassword.body).toMatchObject({
+      id: staffId,
+      mustResetPw: true,
+    });
+    expectNoSecret(resetStaffPassword.body);
+
+    const updatedCustomer = await call(
+      'ADMIN',
+      'PATCH',
+      `/api/v1/admin/customers/${users.CUSTOMER.id.toString()}`,
+      { isActive: false },
+    );
+    expect(updatedCustomer.status).toBe(200);
+    expect(updatedCustomer.body).toMatchObject({
+      id: users.CUSTOMER.id.toString(),
+      role: 'CUSTOMER',
+      isActive: false,
+    });
+
+    const resetCustomerPassword = await call(
+      'ADMIN',
+      'POST',
+      `/api/v1/admin/customers/${users.CUSTOMER.id.toString()}/reset-password`,
+      { password: 'Replacement@123' },
+    );
+    expect(resetCustomerPassword.status).toBe(201);
+    expect(resetCustomerPassword.body).toMatchObject({
+      id: users.CUSTOMER.id.toString(),
+      role: 'CUSTOMER',
+      isActive: false,
+      mustResetPw: true,
+    });
+    expectNoSecret(resetCustomerPassword.body);
   });
 
   async function accessToken(email: string, password: string): Promise<string> {
@@ -374,15 +557,95 @@ describe('Role and ownership access matrix', () => {
     body?: Record<string, unknown>,
     query?: Record<string, string>,
   ) {
-    const request = api(app)[method.toLowerCase() as 'get' | 'post' | 'put' | 'patch' | 'delete'](
-      path,
-    );
+    const request =
+      api(app)[
+        method.toLowerCase() as 'get' | 'post' | 'put' | 'patch' | 'delete'
+      ](path);
     if (token) request.set('Authorization', `Bearer ${token}`);
     if (query) request.query(query);
     if (body) request.send(body);
     return request;
   }
 });
+
+function expectAccountManagementBody(
+  method: Method,
+  path: string,
+  actor: Actor,
+  status: number,
+  body: unknown,
+  accounts: Record<Role, Account>,
+): void {
+  if (actor !== 'ADMIN' || status === 401 || status === 403) return;
+
+  if (method === 'GET' && path === '/api/v1/admin/staff' && status === 200) {
+    const emails = accountEmails(body, 'staff');
+    expect(emails).toEqual(
+      expect.arrayContaining([
+        accounts.ADMIN.email,
+        accounts.RECEPTIONIST.email,
+      ]),
+    );
+    expect(emails).not.toContain(accounts.CUSTOMER.email);
+    return;
+  }
+
+  if (
+    method === 'GET' &&
+    path === '/api/v1/admin/customers' &&
+    status === 200
+  ) {
+    const emails = accountEmails(body, 'customers');
+    expect(emails).toContain(accounts.CUSTOMER.email);
+    expect(emails).not.toContain(accounts.ADMIN.email);
+    expect(emails).not.toContain(accounts.RECEPTIONIST.email);
+    return;
+  }
+
+  if (method === 'POST' && path === '/api/v1/admin/staff' && status === 400) {
+    expect(validationMessages(body)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('fullName'),
+        expect.stringContaining('email'),
+        expect.stringContaining('mobile'),
+        expect.stringContaining('password'),
+      ]),
+    );
+    return;
+  }
+
+  if (method === 'PATCH' && status === 400 && path.endsWith('/:id')) {
+    expect(body).toMatchObject({
+      statusCode: 400,
+      message: 'No changes were provided',
+    });
+    return;
+  }
+
+  if (method === 'POST' && status === 400 && path.endsWith('/reset-password')) {
+    expect(validationMessages(body)).toEqual(
+      expect.arrayContaining([expect.stringContaining('password')]),
+    );
+  }
+}
+
+function accountEmails(body: unknown, key: 'staff' | 'customers'): string[] {
+  expect(body).toEqual(
+    expect.objectContaining({
+      [key]: expect.any(Array),
+      summary: expect.objectContaining({ total: expect.any(Number) }),
+    }),
+  );
+  const records = (body as Record<string, { email?: string }[]>)[key];
+  return records.map((account) => account.email ?? '');
+}
+
+function validationMessages(body: unknown): string[] {
+  expect(body).toMatchObject({ statusCode: 400 });
+  const message = (body as { message?: unknown }).message;
+  expect(Array.isArray(message)).toBe(true);
+  return message as string[];
+}
 
 function concreteUrl(path: string): string {
   return path
@@ -511,6 +774,7 @@ function byRoute(
 
 function normalizePath(path: string): string {
   const collapsed = path.replace(/\/{2,}/g, '/');
-  if (collapsed.length > 1 && collapsed.endsWith('/')) return collapsed.slice(0, -1);
+  if (collapsed.length > 1 && collapsed.endsWith('/'))
+    return collapsed.slice(0, -1);
   return collapsed || '/';
 }

@@ -118,7 +118,7 @@ describe('Authentication regression', () => {
       expect(stored?.failedLogins).toBe(1);
     });
 
-    it('rejects an inactive account with the same message as a bad password', async () => {
+    it('rejects a deactivated account after the right password', async () => {
       const customer = await createCustomer({ isActive: false });
 
       const response = await api(app).post('/api/v1/auth/login').send({
@@ -126,8 +126,12 @@ describe('Authentication regression', () => {
         password: customer.password,
       });
 
-      expect(response.status).toBe(401);
-      expect(response.body.message).toBe('Invalid email or password');
+      expect(response.status).toBe(403);
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'ACCOUNT_INACTIVE',
+        message: 'Your account is deactivated. Please contact the hotel.',
+      });
       expectNoSecret(response.body);
     });
 

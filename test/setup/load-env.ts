@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
+import { loadTestEnvironment } from './load-test-env.js';
 
-// Loads .env.test without overriding variables that are already set (CI sets its own).
-if (existsSync('.env.test')) process.loadEnvFile('.env.test');
+loadTestEnvironment();
