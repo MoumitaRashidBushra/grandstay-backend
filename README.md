@@ -272,21 +272,21 @@ $ npm run test:cov
 
 ### API tests (Vitest + Supertest, real PostgreSQL)
 
-API tests live in `test/**/*.e2e-spec.ts` and run against a separate, throwaway
-PostgreSQL container (`docker-compose.test.yml`, port 5433, database `grandstay_test`),
-so they never touch development data.
+API tests live in `test/**/*.e2e-spec.ts` and use the configured PostgreSQL database
+with a dedicated `grandstay_test` schema. Locally, `DATABASE_URL` is read from `.env`;
+the suite migrates and clears tables only inside that isolated schema, leaving the
+application's `public` schema untouched. CI can continue using its disposable database.
 
 ```bash
-$ npm run test:db:up     # start the test database (waits until healthy)
 $ npm run test:e2e       # apply migrations, then run the API suite
-$ npm run test:db:down   # stop and delete the test database
 ```
 
-- Settings come from `.env.test`; variables already set in the environment (CI) win.
+- Test settings come from `.env.test`; the database URL comes from the environment or `.env`.
 - Migrations are applied automatically before the suite (`test/setup/global-setup.ts`).
-  The suite refuses to run unless `NODE_ENV=test` and the database name ends in `_test`.
+  The suite refuses to run unless `NODE_ENV=test`, the database is `grandstay_db` or ends
+  in `_test`, and the selected schema is `grandstay_test`.
 - Helpers in `test/utils/`: `createTestApp()` / `api(app)` (Supertest against the full
-  `AppModule`), `resetDatabase()` (truncate all tables), and user factories
+  `AppModule`), `resetDatabase()` (truncate test-schema tables), and user factories
   (`createAdmin()`, `createReceptionist()`, `createCustomer()`).
 
 ```ts

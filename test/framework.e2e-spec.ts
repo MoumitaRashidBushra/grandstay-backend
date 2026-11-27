@@ -12,11 +12,12 @@ describe('API test framework', () => {
   beforeEach(resetDatabase);
   afterAll(disconnectDatabase);
 
-  it('is connected to a migrated *_test database', async () => {
-    const [{ db }] = await prisma.$queryRaw<
-      { db: string }[]
-    >`SELECT current_database() AS db`;
-    expect(db).toMatch(/_test$/);
+  it('is connected to a migrated and isolated test schema', async () => {
+    const [{ db, schema }] = await prisma.$queryRaw<
+      { db: string; schema: string }[]
+    >`SELECT current_database() AS db, current_schema() AS schema`;
+    expect(db === 'grandstay_db' || db.endsWith('_test')).toBe(true);
+    expect(schema).toBe('grandstay_test');
     const migrations = await prisma.$queryRaw<
       { n: bigint }[]
     >`SELECT count(*) AS n FROM _prisma_migrations`;
