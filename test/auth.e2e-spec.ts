@@ -118,7 +118,11 @@ describe('Authentication regression', () => {
       expect(stored?.failedLogins).toBe(1);
     });
 
+
+    it('tells a deactivated user the account is inactive after the correct password', async () => {
+
     it('rejects a deactivated account after the right password', async () => {
+
       const customer = await createCustomer({ isActive: false });
 
       const response = await api(app).post('/api/v1/auth/login').send({
@@ -127,6 +131,7 @@ describe('Authentication regression', () => {
       });
 
       expect(response.status).toBe(403);
+      expect(response.body.code).toBe('ACCOUNT_INACTIVE');
       expect(response.body).toMatchObject({
         statusCode: 403,
         code: 'ACCOUNT_INACTIVE',
@@ -347,6 +352,239 @@ describe('Authentication regression', () => {
     });
   });
 
+  describe('FR-AUTH-01 customer registration', () => {
+    it('registers a customer who can log in at once', async () => {
+      const response = await api(app).post('/api/v1/auth/register').send({
+        fullName: 'Rahim',
+        email: 'Rahim@Example.com',
+        mobile: '01711000001',
+        password: 'Str0ng!Pass',
+      });
+
+      expect(response.status).toBe(201);
+      expect(response.body).toMatchObject({
+        fullName: 'Rahim',
+        email: 'rahim@example.com',
+        mobile: '01711000001',
+        role: 'CUSTOMER',
+        mustResetPw: false,
+        isActive: true,
+      });
+
+      const stored = await prisma.user.findUnique({
+        where: { email: 'rahim@example.com' },
+      });
+      expect(stored?.passwordHash.startsWith('$argon2id$v=19$m=19456,t=2,p=1$')).toBe(true);
+      expect(stored?.passwordHash).not.toContain('Str0ng!Pass');
+
+      await api(app)
+        .post('/api/v1/auth/login')
+        .send({ email: 'rahim@example.com', password: 'Str0ng!Pass' })
+        .expect(200);
+    });
+
+    it('returns 409 EMAIL_TAKEN when the email is already registered', async () => {
+      await api(app).post('/api/v1/auth/register').send(registration()).expect(201);
+
+      const duplicate = await api(app)
+        .post('/api/v1/auth/register')
+        .send(registration({ email: 'RAHIM@example.com' }));
+
+      expect(duplicate.status).toBe(409);
+      expect(duplicate.body.code).toBe('EMAIL_TAKEN');
+      expect(await prisma.user.count()).toBe(1);
+    });
+
+    it('rejects self-registration with a staff role', async () => {
+      for (const role of ['RECEPTIONIST', 'ADMIN']) {
+        const response = await api(app)
+          .post('/api/v1/auth/register')
+          .send(registration({ email: `${role.toLowerCase()}@example.com`, role }));
+
+        expect(response.status).toBe(422);
+        expect(JSON.stringify(response.body)).toContain('role');
+      }
+
+      expect(await prisma.user.count()).toBe(0);
+    });
+  });
+
+  describe('FR-AUTH-03 staff accounts', () => {
+    it('requires a new password at first login for a receptionist created by an admin', async () => {
+      const admin = await createAdmin();
+      const adminToken = await tokenFor(admin.email, admin.password);
+
+      const created = await api(app)
+        .post('/api/v1/admin/staff')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          fullName: 'Nadia',
+          email: 'nadia@example.com',
+          mobile: '01711000002',
+          password: 'TempPass1',
+        });
+
+      expect(created.status).toBe(201);
+      expect(created.body).toMatchObject({
+        fullName: 'Nadia',
+        role: 'RECEPTIONIST',
+        mustResetPw: true,
+      });
+
+      const firstLogin = await api(app).post('/api/v1/auth/login').send({
+        email: 'nadia@example.com',
+        password: 'TempPass1',
+      });
+      expect(firstLogin.status).toBe(200);
+      expect(firstLogin.body.user.mustResetPw).toBe(true);
+
+      await api(app)
+        .post('/api/v1/me/password')
+        .set('Authorization', `Bearer ${firstLogin.body.accessToken}`)
+        .send({ currentPassword: 'TempPass1', newPassword: 'NewPass123' })
+        .expect(200);
+
+      const nextLogin = await api(app)
+        .post('/api/v1/auth/login')
+        .send({ email: 'nadia@example.com', password: 'NewPass123' })
+        .expect(200);
+      expect(nextLogin.body.user.mustResetPw).toBe(false);
+    });
+
+    it('deactivates a receptionist immediately and allows reactivation', async () => {
+      const admin = await createAdmin();
+      const adminToken = await tokenFor(admin.email, admin.password);
+      const created = await api(app)
+        .post('/api/v1/admin/staff')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          fullName: 'Nadia',
+          email: 'nadia@example.com',
+          mobile: '01711000002',
+          password: 'TempPass1',
+        })
+        .expect(201);
+
+      const login = await api(app)
+        .post('/api/v1/auth/login')
+        .send({ email: 'nadia@example.com', password: 'TempPass1' })
+        .expect(200);
+      const refreshToken = cookieValue(setCookie(login, 'refreshToken'));
+
+      const deactivated = await api(app)
+        .patch(`/api/v1/admin/staff/${created.body.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ isActive: false });
+      expect(deactivated.status).toBe(200);
+      expect(deactivated.body.isActive).toBe(false);
+
+      await api(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', `refreshToken=${refreshToken}`)
+        .expect(401);
+
+      const blocked = await api(app).post('/api/v1/auth/login').send({
+        email: 'nadia@example.com',
+        password: 'TempPass1',
+      });
+      expect(blocked.status).toBe(403);
+      expect(blocked.body.code).toBe('ACCOUNT_INACTIVE');
+
+      await api(app)
+        .patch(`/api/v1/admin/staff/${created.body.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ isActive: true })
+        .expect(200);
+
+      await api(app)
+        .post('/api/v1/auth/login')
+        .send({ email: 'nadia@example.com', password: 'TempPass1' })
+        .expect(200);
+    });
+
+    it('forbids customers and receptionists from managing staff', async () => {
+      const [customer, receptionist] = await Promise.all([
+        createCustomer(),
+        createReceptionist(),
+      ]);
+
+      for (const user of [customer, receptionist]) {
+        const token = await tokenFor(user.email, user.password);
+        const response = await api(app)
+          .post('/api/v1/admin/staff')
+          .set('Authorization', `Bearer ${token}`)
+          .send({
+            fullName: 'Nadia',
+            email: 'nadia@example.com',
+            mobile: '01711000002',
+            password: 'TempPass1',
+          });
+        expect(response.status).toBe(403);
+      }
+
+      await api(app).post('/api/v1/admin/staff').send({}).expect(401);
+    });
+
+    it('does not let the only admin deactivate themselves', async () => {
+      const admin = await createAdmin();
+      const adminToken = await tokenFor(admin.email, admin.password);
+
+      const response = await api(app)
+        .patch(`/api/v1/admin/staff/${admin.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ isActive: false });
+
+      expect(response.status).toBe(403);
+      const stored = await prisma.user.findUnique({ where: { id: admin.id } });
+      expect(stored?.isActive).toBe(true);
+    });
+  });
+
+  describe('FR-AUTH-04 password change', () => {
+    it('rejects a password change when the current password is wrong', async () => {
+      const customer = await createCustomer();
+      const token = await tokenFor(customer.email, customer.password);
+
+      const response = await api(app)
+        .post('/api/v1/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          currentPassword: 'not-the-password',
+          newPassword: 'NewPass123',
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('CURRENT_PASSWORD_WRONG');
+    });
+
+    it('changes the password and revokes existing refresh tokens', async () => {
+      const customer = await createCustomer();
+      const login = await api(app)
+        .post('/api/v1/auth/login')
+        .send({ email: customer.email, password: customer.password })
+        .expect(200);
+      const refreshToken = cookieValue(setCookie(login, 'refreshToken'));
+
+      await api(app)
+        .post('/api/v1/me/password')
+        .set('Authorization', `Bearer ${login.body.accessToken}`)
+        .send({
+          currentPassword: customer.password,
+          newPassword: 'NewPass123',
+        })
+        .expect(200);
+
+      await api(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', `refreshToken=${refreshToken}`)
+        .expect(401);
+      await api(app)
+        .post('/api/v1/auth/login')
+        .send({ email: customer.email, password: 'NewPass123' })
+        .expect(200);
+    });
+  });
+
   async function tokenFor(email: string, password: string): Promise<string> {
     const response = await api(app)
       .post('/api/v1/auth/login')
@@ -355,6 +593,16 @@ describe('Authentication regression', () => {
     return response.body.accessToken as string;
   }
 });
+
+function registration(overrides: Record<string, string> = {}) {
+  return {
+    fullName: 'Rahim',
+    email: 'rahim@example.com',
+    mobile: '01711000001',
+    password: 'Str0ng!Pass',
+    ...overrides,
+  };
+}
 
 function expectNoSecret(body: unknown): void {
   expect(JSON.stringify(body)).not.toMatch(/passwordHash|password_hash|\$argon2|\$2[aby]\$/i);
@@ -375,3 +623,4 @@ function cookieValue(cookie: string): string {
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
+

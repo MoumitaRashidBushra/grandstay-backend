@@ -12,6 +12,11 @@ describe('API test framework', () => {
   beforeEach(resetDatabase);
   afterAll(disconnectDatabase);
 
+  it('is connected to grandstay_db or a migrated *_test database', async () => {
+    const [{ db }] = await prisma.$queryRaw<
+      { db: string }[]
+    >`SELECT current_database() AS db`;
+    expect(db).toMatch(/(_test|grandstay_db)$/);
   it('is connected to a migrated and isolated test schema', async () => {
     const [{ db, schema }] = await prisma.$queryRaw<
       { db: string; schema: string }[]

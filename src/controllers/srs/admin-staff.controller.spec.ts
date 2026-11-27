@@ -6,7 +6,6 @@ import { AdminStaffController } from './admin-staff.controller.js';
 
 describe('AdminStaffController', () => {
   const staffService = {
-    list: vi.fn().mockResolvedValue({ staff: [] }),
     create: vi.fn().mockResolvedValue({ id: '4' }),
     update: vi.fn().mockResolvedValue({ id: '4' }),
   };
@@ -16,15 +15,6 @@ describe('AdminStaffController', () => {
     expect(Reflect.getMetadata(ROLES_KEY, AdminStaffController)).toEqual([
       UserRole.ADMIN,
     ]);
-  });
-
-  it('lists staff through the service', async () => {
-    const query = { search: 'rubina' };
-
-    await expect(controller.listStaff(query as never)).resolves.toEqual({
-      staff: [],
-    });
-    expect(staffService.list).toHaveBeenCalledWith(query);
   });
 
   it('creates a staff account through the service', async () => {

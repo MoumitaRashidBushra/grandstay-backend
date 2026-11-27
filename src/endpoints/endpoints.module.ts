@@ -5,10 +5,7 @@ import {
   AdminReportsController,
   AdminRoomsController,
 } from '../controllers/srs/admin.controller.js';
-import {
-  AdminCustomersController,
-  AdminStaffController,
-} from '../controllers/srs/admin-staff.controller.js';
+import { AdminStaffController } from '../controllers/srs/admin-staff.controller.js';
 import { StaffService } from '../services/staff/staff.service.js';
 import {
   AvailabilityController,
@@ -31,7 +28,6 @@ import {
     CategoriesController,
     AvailabilityController,
     AdminStaffController,
-    AdminCustomersController,
     AdminRoomsController,
     AdminReportsController,
     DeskController,

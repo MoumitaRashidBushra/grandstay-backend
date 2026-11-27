@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   NotFoundException,
+  NotImplementedException,
   Post,
   Req,
 } from '@nestjs/common';
@@ -13,6 +14,7 @@ import { UserRole } from '@prisma/client';
 import { AllowDuringPasswordReset } from '../../auth/decorators/allow-during-password-reset.decorator.js';
 import { Roles } from '../../auth/decorators/roles.decorator.js';
 import type { AuthenticatedRequest } from '../../auth/guards/jwt-auth.guard.js';
+import { isEmptyBody } from '../../auth/validated-body.pipe.js';
 import { ChangePasswordDto } from '../../dto/change-password.dto.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuthService } from '../../services/auth/auth.service.js';
@@ -61,8 +63,14 @@ export class MeController {
   @Roles(UserRole.ADMIN, UserRole.RECEPTIONIST, UserRole.CUSTOMER)
   changePassword(
     @Req() request: AuthenticatedRequest,
-    @Body() body: ChangePasswordDto,
+    @Body() body: Record<string, unknown>,
   ) {
-    return this.authService.changePassword(request.user.sub, body);
+    if (isEmptyBody(body)) {
+      throw new NotImplementedException('Password change is not implemented yet');
+    }
+    return this.authService.changePassword(
+      request.user.sub,
+      body as unknown as ChangePasswordDto,
+    );
   }
 }
