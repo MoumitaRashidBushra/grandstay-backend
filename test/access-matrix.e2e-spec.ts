@@ -1,5 +1,4 @@
 import { ThrottlerGuard } from '@nestjs/throttler';
-import type { User } from '@prisma/client';
 import type { TestApp } from './utils/app.js';
 import { api, createTestApp } from './utils/app.js';
 import { disconnectDatabase, prisma, resetDatabase } from './utils/db.js';
@@ -9,6 +8,10 @@ import {
   createReceptionist,
 } from './utils/factories.js';
 
+// HTL-35.3 role and ownership access matrix.
+// NFR-SEC-03: every mounted route is called with no token and with each role.
+// NFR-SEC-04: a booking reference or invoice number returns another customer's
+// data to nobody. Profile reads follow the token subject.
 
 const ROLES = ['ADMIN', 'RECEPTIONIST', 'CUSTOMER'] as const;
 type Role = (typeof ROLES)[number];
@@ -16,7 +19,7 @@ type Actor = Role | 'anonymous';
 
 const ACTORS: Actor[] = ['anonymous', ...ROLES];
 
-type Account = User & { password: string };
+type Account = Awaited<ReturnType<typeof createAdmin>> & { password: string };
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 type Endpoint = {
@@ -67,7 +70,7 @@ const ENDPOINTS: Endpoint[] = [
     method: 'POST',
     path: '/api/v1/auth/register',
     body: {},
-    expect: everyone(501),
+    expect: everyone(400),
   },
   { method: 'POST', path: '/api/v1/auth/login', body: {}, expect: everyone(400) },
   { method: 'POST', path: '/api/v1/auth/refresh', expect: everyone(401) },
@@ -81,19 +84,47 @@ const ENDPOINTS: Endpoint[] = [
     method: 'POST',
     path: '/api/v1/me/password',
     body: {},
-    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 501),
+    expect: allow(['ADMIN', 'RECEPTIONIST', 'CUSTOMER'], 400),
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/staff',
+    expect: allow(['ADMIN'], 200),
   },
   {
     method: 'POST',
     path: '/api/v1/admin/staff',
     body: {},
-    expect: allow(['ADMIN'], 501),
+    expect: allow(['ADMIN'], 400),
   },
   {
     method: 'PATCH',
     path: '/api/v1/admin/staff/:id',
     body: {},
-    expect: allow(['ADMIN'], 501),
+    expect: allow(['ADMIN'], 400),
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/admin/staff/:id/reset-password',
+    body: {},
+    expect: allow(['ADMIN'], 400),
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/customers',
+    expect: allow(['ADMIN'], 200),
+  },
+  {
+    method: 'PATCH',
+    path: '/api/v1/admin/customers/:id',
+    body: {},
+    expect: allow(['ADMIN'], 400),
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/admin/customers/:id/reset-password',
+    body: {},
+    expect: allow(['ADMIN'], 400),
   },
   { method: 'GET', path: '/api/v1/admin/rooms', expect: allow(['ADMIN'], 501) },
   { method: 'POST', path: '/api/v1/admin/rooms', body: {}, expect: allow(['ADMIN'], 501) },
